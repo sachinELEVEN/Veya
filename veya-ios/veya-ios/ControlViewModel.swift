@@ -253,6 +253,10 @@ final class ControlViewModel: ObservableObject {
     private func attemptAutoHold() {
         guard trackingMode == .northHold else { return }
         guard autoHoldEnabled else { return }
+        guard hasAutoCalibrated else {
+            connectionMessage = "Calibrating first..."
+            return
+        }
         guard !isSending else { return }
         guard let host = validatedHost else { return }
         guard motion.isAvailable, heading.isAvailable else { return }
@@ -290,6 +294,11 @@ final class ControlViewModel: ObservableObject {
         guard trackingMode == .faceTracking else { return }
         guard let host = validatedHost else { return }
         guard faceTracking.isAvailable else { return }
+        guard hasAutoCalibrated else {
+            faceSearchStatus = "Calibrating first..."
+            connectionMessage = "Calibrating first..."
+            return
+        }
 
         let now = Date()
         log.debug("Face tick detected=\(self.faceTracking.faceDetected, privacy: .public) sending=\(self.isSending, privacy: .public) searchInit=\(self.faceSearchInitialized, privacy: .public) locked=\(self.faceLockedOnTarget, privacy: .public) status=\(self.faceSearchStatus, privacy: .public)")
@@ -385,7 +394,7 @@ final class ControlViewModel: ObservableObject {
         if !faceSearchInitialized {
             faceSearchBasePanDegrees = currentHeadingDegrees
             faceSearchBaseTiltDegrees = clampPitch(70)
-            faceSearchPanOffset = -faceSearchPanRange
+            faceSearchPanOffset = 0
             faceSearchPanDirection = 1
             faceSearchLegsCompleted = 0
             faceSearchTiltTargetDegrees = faceSearchBaseTiltDegrees
@@ -462,7 +471,7 @@ final class ControlViewModel: ObservableObject {
             guard !faceTracking.faceDetected else { break }
 
             faceSearchBasePanDegrees = currentHeadingDegrees
-            faceSearchPanOffset = -faceSearchPanRange
+            faceSearchPanOffset = 0
             faceSearchPanDirection = 1
             faceSearchTiltTargetDegrees = clampPitch(70)
             faceSearchStatus = "Retrying face search at 70°"
@@ -527,6 +536,7 @@ final class ControlViewModel: ObservableObject {
 
         let wasEnabled = autoHoldEnabled
         autoHoldEnabled = false
+        hasAutoCalibrated = false
 
         calibrationMessage = "Calibrating motor 1..."
         let panSign = await calibrateAxis(
