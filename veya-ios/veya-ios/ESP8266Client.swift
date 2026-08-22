@@ -9,26 +9,12 @@ struct ESP8266Client {
         try await request(host: host, path: "/state")
     }
 
-    func move(host: String, motor1: Double, motor2: Double) async throws -> ESP8266Status {
-        let queryItems = [
-            URLQueryItem(name: "m1", value: motor1.formatted(.number.precision(.fractionLength(2)))),
-            URLQueryItem(name: "m2", value: motor2.formatted(.number.precision(.fractionLength(2))))
-        ]
-        return try await request(host: host, path: "/move", queryItems: queryItems)
-    }
-
     func jog(host: String, delta1: Double, delta2: Double) async throws -> ESP8266Status {
         let queryItems = [
             URLQueryItem(name: "dm1", value: delta1.formatted(.number.precision(.fractionLength(2)))),
             URLQueryItem(name: "dm2", value: delta2.formatted(.number.precision(.fractionLength(2))))
         ]
         return try await request(host: host, path: "/jog", queryItems: queryItems)
-    }
-
-    func preset(host: String, name: String) async throws -> ESP8266Status {
-        try await request(host: host, path: "/preset", queryItems: [
-            URLQueryItem(name: "name", value: name)
-        ])
     }
 
     func zero(host: String) async throws -> ESP8266Status {
@@ -71,4 +57,3 @@ struct ESP8266Client {
         return url
     }
 }
-

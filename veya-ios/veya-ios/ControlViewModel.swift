@@ -50,7 +50,7 @@ final class ControlViewModel: ObservableObject {
     private let headingSmoothing: Double = 0.22
     private let faceSmoothing: Double = 0.30
     private let faceSearchPanRange: Double = 135
-    private let faceSearchPanSpeedDegreesPerSecond: Double = 30
+    private let faceSearchPanSpeedDegreesPerSecond: Double = 20
     private let faceSearchLoopTick: UInt64 = 50_000_000
     private let faceSearchRetryInterval: TimeInterval = 5.0
     private let faceLostGracePeriod: TimeInterval = 2.5
@@ -62,8 +62,6 @@ final class ControlViewModel: ObservableObject {
     private var lastSendTime = Date.distantPast
     private var lastFaceSendTime = Date.distantPast
     private var lastFaceSeenTime = Date.distantPast
-    private var faceSearchBasePanDegrees: Double = 0
-    private var faceSearchBaseTiltDegrees: Double = 0
     private var faceSearchPanOffset: Double = 0
     private var faceSearchPanDirection: Double = 1
     private var faceSearchTiltTargetDegrees: Double = 0
@@ -392,23 +390,25 @@ final class ControlViewModel: ObservableObject {
 
     private func runFaceSearchLoop(host: String) async {
         if !faceSearchInitialized {
-            faceSearchBasePanDegrees = currentHeadingDegrees
-            faceSearchBaseTiltDegrees = clampPitch(70)
             faceSearchPanOffset = 0
             faceSearchPanDirection = 1
             faceSearchLegsCompleted = 0
-            faceSearchTiltTargetDegrees = faceSearchBaseTiltDegrees
+            faceSearchTiltTargetDegrees = clampPitch(70)
             faceSearchStatus = "Searching face at 70°"
             faceSearchInitialized = true
-            log.debug("Face search init basePan=\(self.faceSearchBasePanDegrees, privacy: .public) baseTilt=\(self.faceSearchBaseTiltDegrees, privacy: .public) panOffset=\(self.faceSearchPanOffset, privacy: .public) panDir=\(self.faceSearchPanDirection, privacy: .public)")
-
-            log.debug("Face search initial move sending.")
-            await sendMove(
-                host: host,
-                motor1: faceSearchBasePanDegrees + faceSearchPanOffset,
-                motor2: faceSearchTiltTargetDegrees,
-                message: "Searching face."
+            let initialTiltDelta = limitedMotor2Delta(
+                from: motion.pitchDegrees,
+                desiredDelta: faceSearchTiltTargetDegrees - motion.pitchDegrees
             )
+            log.debug("Face search init tiltDelta=\(initialTiltDelta, privacy: .public) panOffset=\(self.faceSearchPanOffset, privacy: .public) panDir=\(self.faceSearchPanDirection, privacy: .public)")
+            if abs(initialTiltDelta) >= 0.05 {
+                await sendJog(
+                    host: host,
+                    deltaMotor1: 0,
+                    deltaMotor2: initialTiltDelta,
+                    message: "Searching face."
+                )
+            }
         }
 
         let tickSeconds = Double(faceSearchLoopTick) / 1_000_000_000.0
@@ -438,7 +438,7 @@ final class ControlViewModel: ObservableObject {
             faceSearchPanOffset = nextOffset
             faceSearchTiltTargetDegrees = clampPitch(70)
             faceSearchStatus = "Searching face: sweeping at 70°"
-            log.debug("Face search sweep step=\(appliedStep, privacy: .public) targetPan=\(self.faceSearchBasePanDegrees + self.faceSearchPanOffset, privacy: .public) targetTilt=\(self.faceSearchTiltTargetDegrees, privacy: .public) panOffset=\(self.faceSearchPanOffset, privacy: .public) panDir=\(self.faceSearchPanDirection, privacy: .public)")
+            log.debug("Face search sweep step=\(appliedStep, privacy: .public) targetTilt=\(self.faceSearchTiltTargetDegrees, privacy: .public) panOffset=\(self.faceSearchPanOffset, privacy: .public) panDir=\(self.faceSearchPanDirection, privacy: .public)")
 
             await sendJog(
                 host: host,
@@ -470,18 +470,23 @@ final class ControlViewModel: ObservableObject {
             guard trackingMode == .faceTracking else { break }
             guard !faceTracking.faceDetected else { break }
 
-            faceSearchBasePanDegrees = currentHeadingDegrees
             faceSearchPanOffset = 0
             faceSearchPanDirection = 1
             faceSearchTiltTargetDegrees = clampPitch(70)
             faceSearchStatus = "Retrying face search at 70°"
-            log.debug("Face search retrying basePan=\(self.faceSearchBasePanDegrees, privacy: .public) baseTilt=\(self.faceSearchBaseTiltDegrees, privacy: .public) panOffset=\(self.faceSearchPanOffset, privacy: .public)")
-            await sendMove(
-                host: host,
-                motor1: faceSearchBasePanDegrees + faceSearchPanOffset,
-                motor2: faceSearchTiltTargetDegrees,
-                message: "Searching face."
+            let retryTiltDelta = limitedMotor2Delta(
+                from: motion.pitchDegrees,
+                desiredDelta: faceSearchTiltTargetDegrees - motion.pitchDegrees
             )
+            log.debug("Face search retrying tiltDelta=\(retryTiltDelta, privacy: .public) panOffset=\(self.faceSearchPanOffset, privacy: .public)")
+            if abs(retryTiltDelta) >= 0.05 {
+                await sendJog(
+                    host: host,
+                    deltaMotor1: 0,
+                    deltaMotor2: retryTiltDelta,
+                    message: "Searching face."
+                )
+            }
         }
 
         if !Task.isCancelled {
@@ -505,24 +510,6 @@ final class ControlViewModel: ObservableObject {
             lastErrorMessage = error.localizedDescription
             connectionMessage = "Command failed."
             log.debug("sendJog failed error=\(error.localizedDescription, privacy: .public)")
-        }
-
-        isSending = false
-    }
-
-    private func sendMove(host: String, motor1: Double, motor2: Double, message: String) async {
-        do {
-            isSending = true
-            log.debug("sendMove start host=\(host, privacy: .public) motor1=\(motor1, privacy: .public) motor2=\(motor2, privacy: .public)")
-            let status = try await client.move(host: host, motor1: motor1, motor2: clampPitch(motor2))
-            lastStatus = status
-            lastErrorMessage = nil
-            connectionMessage = message
-            log.debug("sendMove success message=\(message, privacy: .public) status=\(status.message, privacy: .public)")
-        } catch {
-            lastErrorMessage = error.localizedDescription
-            connectionMessage = "Command failed."
-            log.debug("sendMove failed error=\(error.localizedDescription, privacy: .public)")
         }
 
         isSending = false

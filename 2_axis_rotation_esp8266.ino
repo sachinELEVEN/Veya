@@ -149,7 +149,7 @@ void handleRoot() {
   html += "<meta name='viewport' content='width=device-width,initial-scale=1'>";
   html += "<title>Veya</title></head><body style='font-family:system-ui;padding:24px'>";
   html += "<h1>Veya ESP8266</h1>";
-  html += "<p>Use <code>/health</code>, <code>/move</code>, <code>/jog</code>, <code>/zero</code>, and <code>/state</code>.</p>";
+  html += "<p>Use <code>/health</code>, <code>/jog</code>, <code>/zero</code>, and <code>/state</code>.</p>";
   html += "</body></html>";
   server.send(200, "text/html", html);
 }
@@ -174,50 +174,12 @@ void handleZero() {
   sendJson(200, buildStateJson("zeroed"));
 }
 
-void handleMove() {
-  const float motor1Degrees = readArgFloat("m1", axis1.targetDegrees);
-  const float motor2Degrees = readArgFloat("m2", axis2.targetDegrees);
-
-  applyTargets(motor1Degrees, motor2Degrees);
-  sendJson(200, buildStateJson("moving"));
-}
-
 void handleJog() {
   const float delta1 = readArgFloat("dm1", 0.0f);
   const float delta2 = readArgFloat("dm2", 0.0f);
 
   applyTargets(axis1.targetDegrees + delta1, axis2.targetDegrees + delta2);
   sendJson(200, buildStateJson("jogging"));
-}
-
-void handlePreset() {
-  const String preset = server.hasArg("name") ? server.arg("name") : String();
-
-  if (preset == "home") {
-    applyTargets(0.0f, 0.0f);
-    sendJson(200, buildStateJson("preset:home"));
-    return;
-  }
-
-  if (preset == "look_up") {
-    applyTargets(0.0f, 70.0f);
-    sendJson(200, buildStateJson("preset:look_up"));
-    return;
-  }
-
-  if (preset == "yes") {
-    applyTargets(axis1.targetDegrees, axis2.targetDegrees + 10.0f);
-    sendJson(200, buildStateJson("preset:yes"));
-    return;
-  }
-
-  if (preset == "no") {
-    applyTargets(axis1.targetDegrees + 10.0f, axis2.targetDegrees);
-    sendJson(200, buildStateJson("preset:no"));
-    return;
-  }
-
-  sendJson(400, "{\"ok\":false,\"message\":\"unknown preset\"}");
 }
 
 void handleNotFound() {
@@ -267,12 +229,8 @@ void setup() {
   server.on("/state", HTTP_GET, handleState);
   server.on("/zero", HTTP_POST, handleZero);
   server.on("/zero", HTTP_GET, handleZero);
-  server.on("/move", HTTP_POST, handleMove);
-  server.on("/move", HTTP_GET, handleMove);
   server.on("/jog", HTTP_POST, handleJog);
   server.on("/jog", HTTP_GET, handleJog);
-  server.on("/preset", HTTP_POST, handlePreset);
-  server.on("/preset", HTTP_GET, handlePreset);
   server.onNotFound(handleNotFound);
 
   server.begin();

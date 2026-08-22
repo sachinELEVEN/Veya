@@ -38,14 +38,6 @@ struct FaceTrackingSample: Equatable {
     static let zero = FaceTrackingSample()
 }
 
-struct StepperTarget: Equatable {
-    var motor1Degrees: Double
-    var motor2Degrees: Double
-
-    static let home = StepperTarget(motor1Degrees: 0, motor2Degrees: 0)
-    static let lookUp = StepperTarget(motor1Degrees: 0, motor2Degrees: 70)
-}
-
 struct ESP8266AxisState: Decodable, Equatable {
     let currentDeg: Double
     let targetDeg: Double
