@@ -36,8 +36,6 @@ AccelStepper motor2(AccelStepper::DRIVER, M2_STEP, M2_DIR);
 
 constexpr float MICROSTEPS_PER_REV = 6400.0f; // 200 * 32
 constexpr float STEPS_PER_DEGREE = MICROSTEPS_PER_REV / 360.0f;
-constexpr float MAX_AXIS_DEGREES = 160.0f;
-constexpr long MAX_AXIS_STEPS = lroundf(MAX_AXIS_DEGREES * STEPS_PER_DEGREE);
 
 constexpr float DEFAULT_MAX_SPEED = 2200.0f;
 constexpr float DEFAULT_ACCELERATION = 1400.0f;
@@ -76,26 +74,6 @@ float stepsToDegrees(long steps) {
   return steps / STEPS_PER_DEGREE;
 }
 
-float clampDegrees(float degrees) {
-  if (degrees > MAX_AXIS_DEGREES) {
-    return MAX_AXIS_DEGREES;
-  }
-  if (degrees < -MAX_AXIS_DEGREES) {
-    return -MAX_AXIS_DEGREES;
-  }
-  return degrees;
-}
-
-long clampSteps(long steps) {
-  if (steps > MAX_AXIS_STEPS) {
-    return MAX_AXIS_STEPS;
-  }
-  if (steps < -MAX_AXIS_STEPS) {
-    return -MAX_AXIS_STEPS;
-  }
-  return steps;
-}
-
 float readArgFloat(const char *name, float fallback) {
   if (!server.hasArg(name)) {
     return fallback;
@@ -116,11 +94,11 @@ void syncAxisState(AxisState &axis, AccelStepper &stepper) {
 }
 
 void applyTargets(float motor1Degrees, float motor2Degrees) {
-  axis1.targetDegrees = clampDegrees(motor1Degrees);
-  axis2.targetDegrees = clampDegrees(motor2Degrees);
+  axis1.targetDegrees = motor1Degrees;
+  axis2.targetDegrees = motor2Degrees;
 
-  axis1.targetSteps = clampSteps(degreesToSteps(axis1.targetDegrees));
-  axis2.targetSteps = clampSteps(degreesToSteps(axis2.targetDegrees));
+  axis1.targetSteps = degreesToSteps(axis1.targetDegrees);
+  axis2.targetSteps = degreesToSteps(axis2.targetDegrees);
 
   motor1.moveTo(axis1.targetSteps);
   motor2.moveTo(axis2.targetSteps);
@@ -228,13 +206,13 @@ void handlePreset() {
   }
 
   if (preset == "yes") {
-    applyTargets(axis1.targetDegrees, clampDegrees(axis2.targetDegrees + 10.0f));
+    applyTargets(axis1.targetDegrees, axis2.targetDegrees + 10.0f);
     sendJson(200, buildStateJson("preset:yes"));
     return;
   }
 
   if (preset == "no") {
-    applyTargets(clampDegrees(axis1.targetDegrees + 10.0f), axis2.targetDegrees);
+    applyTargets(axis1.targetDegrees + 10.0f, axis2.targetDegrees);
     sendJson(200, buildStateJson("preset:no"));
     return;
   }

@@ -1,6 +1,7 @@
 import Combine
 import AVFoundation
 import Foundation
+import OSLog
 import SwiftUI
 
 @MainActor
@@ -33,6 +34,7 @@ final class ControlViewModel: ObservableObject {
     @Published var hasAutoCalibrated = false
 
     private let client = ESP8266Client()
+    private let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "veya-ios", category: "ControlViewModel")
     private let motionCoordinator = MotionCoordinator()
     private let headingCoordinator = HeadingCoordinator()
     private let faceTracker = FaceTrackingCoordinator()
@@ -284,20 +286,20 @@ final class ControlViewModel: ObservableObject {
 
     private func attemptFaceTracking() {
         guard trackingMode == .faceTracking else { return }
-        guard !isSending else { return }
         guard let host = validatedHost else { return }
         guard faceTracking.isAvailable else { return }
 
         let now = Date()
+        log.debug("Face tick detected=\(self.faceTracking.faceDetected, privacy: .public) sending=\(self.isSending, privacy: .public) searchInit=\(self.faceSearchInitialized, privacy: .public) locked=\(self.faceLockedOnTarget, privacy: .public) status=\(self.faceSearchStatus, privacy: .public)")
         if faceTracking.faceDetected {
             lastFaceSeenTime = now
-            if faceSearchInitialized {
-                faceSearchStatus = "Face found"
-            } else {
-                faceSearchStatus = "Face found"
-            }
+            faceSearchStatus = "Face found"
 
-            guard now.timeIntervalSince(lastFaceSendTime) >= faceSendInterval else { return }
+            let sinceLastFaceSend = now.timeIntervalSince(lastFaceSendTime)
+            guard sinceLastFaceSend >= faceSendInterval else {
+                log.debug("Face move skipped by send interval elapsed=\(sinceLastFaceSend, privacy: .public)s wait=\(self.faceSendInterval, privacy: .public)s")
+                return
+            }
 
             let xError = faceTracking.xOffset
             let yError = faceTracking.yOffset
@@ -307,6 +309,7 @@ final class ControlViewModel: ObservableObject {
             let faceMovedEnough = abs(xError - lastFaceLockXOffset) > 0.12 || abs(yError - lastFaceLockYOffset) > 0.12
 
             if faceLockedOnTarget, !faceMovedEnough {
+                log.debug("Face locked, below movement threshold x=\(xError, privacy: .public) y=\(yError, privacy: .public) lastX=\(self.lastFaceLockXOffset, privacy: .public) lastY=\(self.lastFaceLockYOffset, privacy: .public)")
                 return
             }
 
@@ -323,13 +326,16 @@ final class ControlViewModel: ObservableObject {
             let clippedMotor2 = clamp(deltaMotor2, min: -2.5, max: 2.5)
             lastFacePanCommandDegrees = clippedMotor1
             lastFaceTiltCommandDegrees = clippedMotor2
+            log.debug("Face command x=\(xError, privacy: .public) y=\(yError, privacy: .public) coarseX=\(coarseX, privacy: .public) coarseY=\(coarseY, privacy: .public) d1=\(clippedMotor1, privacy: .public) d2=\(clippedMotor2, privacy: .public)")
 
             guard abs(clippedMotor1) >= 0.05 || abs(clippedMotor2) >= 0.05 else {
+                log.debug("Face command suppressed below threshold.")
                 connectionMessage = "Face found. Holding."
                 return
             }
 
             lastFaceSendTime = now
+            log.debug("Face command sending.")
             Task {
                 await sendJog(host: host, deltaMotor1: clippedMotor1, deltaMotor2: clippedMotor2, message: "Face found. Holding.")
             }
@@ -344,10 +350,12 @@ final class ControlViewModel: ObservableObject {
         faceLockedOnTarget = false
         lastFaceLockXOffset = 0
         lastFaceLockYOffset = 0
+        log.debug("Face not detected; lastSeenAge=\(now.timeIntervalSince(self.lastFaceSeenTime), privacy: .public)s")
 
         guard now.timeIntervalSince(lastFaceSeenTime) >= faceLostGracePeriod else {
             faceSearchStatus = "Brief face loss"
             connectionMessage = "Face briefly lost."
+            log.debug("Face briefly lost; waiting for grace period.")
             return
         }
 
@@ -363,8 +371,10 @@ final class ControlViewModel: ObservableObject {
             faceSearchTiltTargetDegrees = faceSearchBaseTiltDegrees
             faceSearchStatus = "Searching face at 70°"
             faceSearchInitialized = true
+            log.debug("Face search init basePan=\(self.faceSearchBasePanDegrees, privacy: .public) baseTilt=\(self.faceSearchBaseTiltDegrees, privacy: .public) panOffset=\(self.faceSearchPanOffset, privacy: .public) panDir=\(self.faceSearchPanDirection, privacy: .public)")
 
             lastFaceSearchStepTime = now
+            log.debug("Face search initial move sending.")
             Task {
                 await sendMove(
                     host: host,
@@ -376,7 +386,11 @@ final class ControlViewModel: ObservableObject {
             return
         }
 
-        guard now.timeIntervalSince(lastFaceSearchStepTime) >= faceSearchStepInterval else { return }
+        let elapsed = now.timeIntervalSince(lastFaceSearchStepTime)
+        guard elapsed >= faceSearchStepInterval else {
+            log.debug("Face search step skipped elapsed=\(elapsed, privacy: .public)s wait=\(self.faceSearchStepInterval, privacy: .public)s")
+            return
+        }
         lastFaceSearchStepTime = now
 
         let liveTiltTarget = clampPitch(70)
@@ -393,6 +407,7 @@ final class ControlViewModel: ObservableObject {
         }
 
         faceSearchStatus = "Searching face: sweeping at 70°"
+        log.debug("Face search sweep targetPan=\(self.faceSearchBasePanDegrees + self.faceSearchPanOffset, privacy: .public) targetTilt=\(liveTiltTarget, privacy: .public) panOffset=\(self.faceSearchPanOffset, privacy: .public) panDir=\(self.faceSearchPanDirection, privacy: .public)")
         Task {
             await sendMove(
                 host: host,
@@ -407,13 +422,16 @@ final class ControlViewModel: ObservableObject {
         do {
             isSending = true
             let boundedDelta2 = limitedMotor2Delta(desiredDelta: deltaMotor2)
+            log.debug("sendJog start host=\(host, privacy: .public) d1=\(deltaMotor1, privacy: .public) d2=\(deltaMotor2, privacy: .public) boundedD2=\(boundedDelta2, privacy: .public)")
             let status = try await client.jog(host: host, delta1: deltaMotor1, delta2: boundedDelta2)
             lastStatus = status
             lastErrorMessage = nil
             connectionMessage = message
+            log.debug("sendJog success message=\(message, privacy: .public) status=\(status.message, privacy: .public)")
         } catch {
             lastErrorMessage = error.localizedDescription
             connectionMessage = "Command failed."
+            log.debug("sendJog failed error=\(error.localizedDescription, privacy: .public)")
         }
 
         isSending = false
@@ -422,13 +440,16 @@ final class ControlViewModel: ObservableObject {
     private func sendMove(host: String, motor1: Double, motor2: Double, message: String) async {
         do {
             isSending = true
+            log.debug("sendMove start host=\(host, privacy: .public) motor1=\(motor1, privacy: .public) motor2=\(motor2, privacy: .public)")
             let status = try await client.move(host: host, motor1: motor1, motor2: clampPitch(motor2))
             lastStatus = status
             lastErrorMessage = nil
             connectionMessage = message
+            log.debug("sendMove success message=\(message, privacy: .public) status=\(status.message, privacy: .public)")
         } catch {
             lastErrorMessage = error.localizedDescription
             connectionMessage = "Command failed."
+            log.debug("sendMove failed error=\(error.localizedDescription, privacy: .public)")
         }
 
         isSending = false
@@ -630,7 +651,7 @@ final class ControlViewModel: ObservableObject {
             return
         }
 
-        let delta = panDirectionSign * motor1TestStepDegrees
+        let delta = -panDirectionSign * motor1TestStepDegrees
         await sendJog(host: host, deltaMotor1: delta, deltaMotor2: 0, message: "Pan moved left.")
     }
 
@@ -644,7 +665,7 @@ final class ControlViewModel: ObservableObject {
             return
         }
 
-        let delta = -panDirectionSign * motor1TestStepDegrees
+        let delta = panDirectionSign * motor1TestStepDegrees
         await sendJog(host: host, deltaMotor1: delta, deltaMotor2: 0, message: "Pan moved right.")
     }
 }
