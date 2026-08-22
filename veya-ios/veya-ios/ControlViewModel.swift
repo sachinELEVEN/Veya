@@ -42,14 +42,14 @@ final class ControlViewModel: ObservableObject {
     private let faceTiltCorrectionGain: Double = 0.50
     private let deadbandHeading: Double = 5.0
     private let deadbandPitch: Double = 5.0
-    private let faceDeadband: Double = 0.18
+    private let faceDeadband: Double = 0.30
     private let sendInterval: TimeInterval = 0.10
     private let faceSendInterval: TimeInterval = 0.08
     private let headingSmoothing: Double = 0.22
     private let faceSmoothing: Double = 0.30
-    private let faceSearchPanRange: Double = 35
-    private let faceSearchPanStep: Double = 6
-    private let faceSearchStepInterval: TimeInterval = 0.9
+    private let faceSearchPanRange: Double = 135
+    private let faceSearchPanStep: Double = 45
+    private let faceSearchStepInterval: TimeInterval = 2.0
     private let faceLostGracePeriod: TimeInterval = 0.35
     private let faceCenterHoldFrames = 3
     private let motor2PitchMinDegrees: Double = 0
@@ -67,6 +67,9 @@ final class ControlViewModel: ObservableObject {
     private var lastFaceSearchStepTime = Date.distantPast
     private var faceCenterStableCount = 0
     private var faceSearchInitialized = false
+    private var faceLockedOnTarget = false
+    private var lastFaceLockXOffset: Double = 0
+    private var lastFaceLockYOffset: Double = 0
     private var pendingStartupCalibration = false
     private var filteredFaceX: Double = 0
     private var filteredFaceY: Double = 0
@@ -288,8 +291,11 @@ final class ControlViewModel: ObservableObject {
         let now = Date()
         if faceTracking.faceDetected {
             lastFaceSeenTime = now
-            faceSearchStatus = "Tracking face"
-            faceSearchInitialized = false
+            if faceSearchInitialized {
+                faceSearchStatus = "Face found"
+            } else {
+                faceSearchStatus = "Face found"
+            }
 
             guard now.timeIntervalSince(lastFaceSendTime) >= faceSendInterval else { return }
 
@@ -298,31 +304,34 @@ final class ControlViewModel: ObservableObject {
             faceErrorX = xError
             faceErrorY = yError
 
-            if abs(xError) < faceDeadband, abs(yError) < faceDeadband {
-                faceCenterStableCount += 1
-                if faceCenterStableCount >= faceCenterHoldFrames {
-                    connectionMessage = "Holding face center."
-                    lastFacePanCommandDegrees = 0
-                    lastFaceTiltCommandDegrees = 0
-                }
+            let faceMovedEnough = abs(xError - lastFaceLockXOffset) > 0.12 || abs(yError - lastFaceLockYOffset) > 0.12
+
+            if faceLockedOnTarget, !faceMovedEnough {
                 return
             }
 
-            faceCenterStableCount = 0
+            faceLockedOnTarget = true
+            faceSearchInitialized = false
+            lastFaceLockXOffset = xError
+            lastFaceLockYOffset = yError
 
-            // Negative sign keeps the camera moving toward the face center.
-            let deltaMotor1 = -xError * facePanCorrectionGain * panDirectionSign
-            let deltaMotor2 = limitedMotor2Delta(desiredDelta: -yError * faceTiltCorrectionGain * tiltDirectionSign)
-            let clippedMotor1 = clamp(deltaMotor1, min: -1.2, max: 1.2)
-            let clippedMotor2 = clamp(deltaMotor2, min: -1.2, max: 1.2)
+            let coarseX = clamp(xError, min: -0.65, max: 0.65)
+            let coarseY = clamp(yError, min: -0.45, max: 0.45)
+            let deltaMotor1 = -coarseX * facePanCorrectionGain * panDirectionSign
+            let deltaMotor2 = limitedMotor2Delta(desiredDelta: -coarseY * faceTiltCorrectionGain * tiltDirectionSign)
+            let clippedMotor1 = clamp(deltaMotor1, min: -3.0, max: 3.0)
+            let clippedMotor2 = clamp(deltaMotor2, min: -2.5, max: 2.5)
             lastFacePanCommandDegrees = clippedMotor1
             lastFaceTiltCommandDegrees = clippedMotor2
 
-            guard abs(clippedMotor1) >= 0.02 || abs(clippedMotor2) >= 0.02 else { return }
+            guard abs(clippedMotor1) >= 0.05 || abs(clippedMotor2) >= 0.05 else {
+                connectionMessage = "Face found. Holding."
+                return
+            }
 
             lastFaceSendTime = now
             Task {
-                await sendJog(host: host, deltaMotor1: clippedMotor1, deltaMotor2: clippedMotor2, message: "Tracking face.")
+                await sendJog(host: host, deltaMotor1: clippedMotor1, deltaMotor2: clippedMotor2, message: "Face found. Holding.")
             }
             return
         }
@@ -332,6 +341,9 @@ final class ControlViewModel: ObservableObject {
         lastFacePanCommandDegrees = 0
         lastFaceTiltCommandDegrees = 0
         faceCenterStableCount = 0
+        faceLockedOnTarget = false
+        lastFaceLockXOffset = 0
+        lastFaceLockYOffset = 0
 
         guard now.timeIntervalSince(lastFaceSeenTime) >= faceLostGracePeriod else {
             faceSearchStatus = "Brief face loss"
@@ -345,11 +357,11 @@ final class ControlViewModel: ObservableObject {
     private func runFaceSearch(host: String, now: Date) {
         if !faceSearchInitialized || faceSearchStatus == "Tracking face" {
             faceSearchBasePanDegrees = currentHeadingDegrees
-            faceSearchBaseTiltDegrees = clampPitch(motion.pitchDegrees)
+            faceSearchBaseTiltDegrees = clampPitch(70)
             faceSearchPanOffset = -faceSearchPanRange
             faceSearchPanDirection = 1
             faceSearchTiltTargetDegrees = faceSearchBaseTiltDegrees
-            faceSearchStatus = "Searching face"
+            faceSearchStatus = "Searching face at 70°"
             faceSearchInitialized = true
 
             lastFaceSearchStepTime = now
@@ -367,7 +379,7 @@ final class ControlViewModel: ObservableObject {
         guard now.timeIntervalSince(lastFaceSearchStepTime) >= faceSearchStepInterval else { return }
         lastFaceSearchStepTime = now
 
-        let liveTiltTarget = clampPitch(motion.pitchDegrees)
+        let liveTiltTarget = clampPitch(70)
         faceSearchTiltTargetDegrees = liveTiltTarget
 
         faceSearchPanOffset += faceSearchPanDirection * faceSearchPanStep
@@ -380,7 +392,7 @@ final class ControlViewModel: ObservableObject {
             faceSearchPanDirection = 1
         }
 
-        faceSearchStatus = "Searching face: pan sweep at phone pitch"
+        faceSearchStatus = "Searching face: sweeping at 70°"
         Task {
             await sendMove(
                 host: host,
