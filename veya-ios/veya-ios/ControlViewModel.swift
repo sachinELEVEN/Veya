@@ -8,7 +8,7 @@ final class ControlViewModel: ObservableObject {
     @Published var motion: MotionSample = .zero
     @Published var heading: HeadingSample = .zero
     @Published var autoHoldEnabled = false
-    @Published var desiredHeadingDegrees: Double = 0
+    @Published var desiredHeadingDegrees: Double = 90
     @Published var desiredPitchDegrees: Double = 70
     @Published var panDirectionSign: Double = 1
     @Published var tiltDirectionSign: Double = 1
@@ -94,7 +94,7 @@ final class ControlViewModel: ObservableObject {
     }
 
     func resetNorthAndUpDefaults() {
-        desiredHeadingDegrees = 0
+        desiredHeadingDegrees = 90
         desiredPitchDegrees = 70
         calibrationMessage = "Target reset to north + slight up."
     }
