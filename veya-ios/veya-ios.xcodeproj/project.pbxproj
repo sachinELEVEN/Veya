@@ -400,6 +400,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				"INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsArbitraryLoadsInLocalNetworking[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsArbitraryLoadsInLocalNetworking[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_NSCameraUsageDescription[sdk=iphoneos*]" = "Veya uses the front camera to detect and track faces.";
+				"INFOPLIST_KEY_NSCameraUsageDescription[sdk=iphonesimulator*]" = "Veya uses the front camera to detect and track faces.";
 				"INFOPLIST_KEY_NSLocalNetworkUsageDescription[sdk=iphoneos*]" = "Veya uses your local Wi-Fi to talk to the ESP8266 motor controller.";
 				"INFOPLIST_KEY_NSLocalNetworkUsageDescription[sdk=iphonesimulator*]" = "Veya uses your local Wi-Fi to talk to the ESP8266 motor controller.";
 				"INFOPLIST_KEY_NSLocationWhenInUseUsageDescription[sdk=iphoneos*]" = "Veya uses compass heading to keep the mounted phone pointing north.";
@@ -453,6 +455,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				"INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsArbitraryLoadsInLocalNetworking[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsArbitraryLoadsInLocalNetworking[sdk=iphonesimulator*]" = YES;
+				"INFOPLIST_KEY_NSCameraUsageDescription[sdk=iphoneos*]" = "Veya uses the front camera to detect and track faces.";
+				"INFOPLIST_KEY_NSCameraUsageDescription[sdk=iphonesimulator*]" = "Veya uses the front camera to detect and track faces.";
 				"INFOPLIST_KEY_NSLocalNetworkUsageDescription[sdk=iphoneos*]" = "Veya uses your local Wi-Fi to talk to the ESP8266 motor controller.";
 				"INFOPLIST_KEY_NSLocalNetworkUsageDescription[sdk=iphonesimulator*]" = "Veya uses your local Wi-Fi to talk to the ESP8266 motor controller.";
 				"INFOPLIST_KEY_NSLocationWhenInUseUsageDescription[sdk=iphoneos*]" = "Veya uses compass heading to keep the mounted phone pointing north.";

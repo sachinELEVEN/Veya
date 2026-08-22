@@ -20,6 +20,24 @@ struct HeadingSample: Equatable {
     static let zero = HeadingSample()
 }
 
+enum TrackingMode: String, CaseIterable, Identifiable {
+    case faceTracking = "Face Tracking"
+    case northHold = "North/Up Hold"
+
+    var id: String { rawValue }
+}
+
+struct FaceTrackingSample: Equatable {
+    var faceDetected: Bool = false
+    var xOffset: Double = 0
+    var yOffset: Double = 0
+    var faceWidth: Double = 0
+    var isAvailable: Bool = false
+    var timestamp: Date = .now
+
+    static let zero = FaceTrackingSample()
+}
+
 struct StepperTarget: Equatable {
     var motor1Degrees: Double
     var motor2Degrees: Double

@@ -11,7 +11,12 @@ struct ContentView: View {
                 VStack(spacing: 16) {
                     heroCard
                     connectionCard
-                    autoHoldCard
+                    trackingModeCard
+                    if viewModel.trackingMode == .faceTracking {
+                        faceTrackingCard
+                    } else {
+                        autoHoldCard
+                    }
                     motionCard
                     calibrationCard
                     statusCard
@@ -100,6 +105,24 @@ struct ContentView: View {
         .cardStyle()
     }
 
+    private var trackingModeCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("Tracking Mode")
+
+            Picker("Tracking Mode", selection: trackingModeBinding) {
+                ForEach(TrackingMode.allCases) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Text(viewModel.trackingMode == .faceTracking ? "Face tracking is the primary mode. The app centers the strongest detected face in the camera view." : "North/up hold uses the compass and motion sensors.")
+                .font(.system(size: 14, weight: .regular, design: .rounded))
+                .foregroundStyle(.white.opacity(0.76))
+        }
+        .cardStyle()
+    }
+
     private var autoHoldCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             sectionTitle("Auto Hold")
@@ -117,6 +140,39 @@ struct ContentView: View {
             }
             .font(.system(size: 13, design: .monospaced))
             .foregroundStyle(.white.opacity(0.78))
+        }
+        .cardStyle()
+    }
+
+    private var faceTrackingCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("Face Tracking")
+
+            CameraPreview(session: viewModel.cameraSession)
+                .frame(height: 240)
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                }
+
+            HStack(spacing: 10) {
+                metricTile(title: "Face X", value: viewModel.faceErrorX, suffix: "norm")
+                metricTile(title: "Face Y", value: viewModel.faceErrorY, suffix: "norm")
+            }
+
+            HStack(spacing: 10) {
+                metricTile(title: "Face Pan", value: viewModel.lastFacePanCommandDegrees, suffix: "°")
+                metricTile(title: "Face Tilt", value: viewModel.lastFaceTiltCommandDegrees, suffix: "°")
+            }
+
+            Text(viewModel.faceSearchStatus)
+                .font(.system(size: 14, weight: .regular, design: .rounded))
+                .foregroundStyle(.white.opacity(0.78))
+
+            Text(viewModel.faceTracking.faceDetected ? "Face detected and being tracked." : "Searching for a face.")
+                .font(.system(size: 14, weight: .regular, design: .rounded))
+                .foregroundStyle(.white.opacity(0.78))
         }
         .cardStyle()
     }
@@ -202,6 +258,13 @@ struct ContentView: View {
         Binding(
             get: { viewModel.autoHoldEnabled },
             set: { viewModel.toggleAutoHold($0) }
+        )
+    }
+
+    private var trackingModeBinding: Binding<TrackingMode> {
+        Binding(
+            get: { viewModel.trackingMode },
+            set: { viewModel.setTrackingMode($0) }
         )
     }
 

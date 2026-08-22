@@ -1,12 +1,15 @@
 import Combine
+import AVFoundation
 import Foundation
 import SwiftUI
 
 @MainActor
 final class ControlViewModel: ObservableObject {
     @Published var espHost: String = UserDefaults.standard.string(forKey: "veya.espHost") ?? ""
+    @Published var trackingMode: TrackingMode = .faceTracking
     @Published var motion: MotionSample = .zero
     @Published var heading: HeadingSample = .zero
+    @Published var faceTracking: FaceTrackingSample = .zero
     @Published var autoHoldEnabled = false
     @Published var desiredHeadingDegrees: Double = 90
     @Published var desiredPitchDegrees: Double = 70
@@ -14,10 +17,15 @@ final class ControlViewModel: ObservableObject {
     @Published var tiltDirectionSign: Double = 1
     @Published var connectionMessage = "Waiting for an ESP8266 address."
     @Published var calibrationMessage = "Not calibrated yet."
+    @Published var faceErrorX: Double = 0
+    @Published var faceErrorY: Double = 0
     @Published var headingErrorDegrees: Double = 0
     @Published var pitchErrorDegrees: Double = 0
     @Published var lastPanCommandDegrees: Double = 0
     @Published var lastTiltCommandDegrees: Double = 0
+    @Published var lastFacePanCommandDegrees: Double = 0
+    @Published var lastFaceTiltCommandDegrees: Double = 0
+    @Published var faceSearchStatus: String = "Idle"
     @Published var filteredHeadingDegrees: Double = 0
     @Published var lastStatus: ESP8266Status?
     @Published var lastErrorMessage: String?
@@ -27,29 +35,63 @@ final class ControlViewModel: ObservableObject {
     private let client = ESP8266Client()
     private let motionCoordinator = MotionCoordinator()
     private let headingCoordinator = HeadingCoordinator()
+    private let faceTracker = FaceTrackingCoordinator()
     private let panCorrectionGain: Double = 0.14
     private let tiltCorrectionGain: Double = 0.12
+    private let facePanCorrectionGain: Double = 0.55
+    private let faceTiltCorrectionGain: Double = 0.50
     private let deadbandHeading: Double = 5.0
     private let deadbandPitch: Double = 5.0
+    private let faceDeadband: Double = 0.18
     private let sendInterval: TimeInterval = 0.10
+    private let faceSendInterval: TimeInterval = 0.08
     private let headingSmoothing: Double = 0.22
+    private let faceSmoothing: Double = 0.30
+    private let faceSearchPanRange: Double = 35
+    private let faceSearchPanStep: Double = 6
+    private let faceSearchStepInterval: TimeInterval = 0.9
+    private let faceLostGracePeriod: TimeInterval = 0.35
+    private let faceCenterHoldFrames = 3
     private var lastSendTime = Date.distantPast
+    private var lastFaceSendTime = Date.distantPast
+    private var lastFaceSeenTime = Date.distantPast
+    private var faceSearchBasePanDegrees: Double = 0
+    private var faceSearchBaseTiltDegrees: Double = 70
+    private var faceSearchPanOffset: Double = 0
+    private var faceSearchPanDirection: Double = 1
+    private var faceSearchTiltTargetDegrees: Double = 70
+    private var lastFaceSearchStepTime = Date.distantPast
+    private var faceCenterStableCount = 0
+    private var faceSearchInitialized = false
     private var pendingStartupCalibration = false
+    private var filteredFaceX: Double = 0
+    private var filteredFaceY: Double = 0
+
+    var cameraSession: AVCaptureSession {
+        faceTracker.session
+    }
 
     init() {
         motionCoordinator.onUpdate = { [weak self] sample in
             self?.motion = sample
-            self?.attemptAutoHold()
+            self?.attemptTracking()
         }
 
         headingCoordinator.onUpdate = { [weak self] sample in
             self?.heading = sample
             self?.updateFilteredHeading(with: sample)
-            self?.attemptAutoHold()
+            self?.attemptTracking()
+        }
+
+        faceTracker.onUpdate = { [weak self] sample in
+            self?.faceTracking = sample
+            self?.updateFilteredFaceOffsets(with: sample)
+            self?.attemptTracking()
         }
 
         motionCoordinator.start()
         headingCoordinator.start()
+        faceTracker.start()
 
         if validatedHost != nil {
             pendingStartupCalibration = true
@@ -87,10 +129,16 @@ final class ControlViewModel: ObservableObject {
         autoHoldEnabled = enabled
         if enabled {
             connectionMessage = "Auto hold enabled."
-            attemptAutoHold()
+            attemptTracking()
         } else {
             connectionMessage = "Auto hold paused."
         }
+    }
+
+    func setTrackingMode(_ mode: TrackingMode) {
+        trackingMode = mode
+        connectionMessage = mode == .faceTracking ? "Face tracking active." : "North/up hold active."
+        attemptTracking()
     }
 
     func resetNorthAndUpDefaults() {
@@ -128,6 +176,23 @@ final class ControlViewModel: ObservableObject {
         return heading.headingDegrees
     }
 
+    private func updateFilteredFaceOffsets(with sample: FaceTrackingSample) {
+        guard sample.isAvailable, sample.faceDetected else {
+            filteredFaceX = 0
+            filteredFaceY = 0
+            return
+        }
+
+        if filteredFaceX == 0 && filteredFaceY == 0 {
+            filteredFaceX = sample.xOffset
+            filteredFaceY = sample.yOffset
+            return
+        }
+
+        filteredFaceX = filteredFaceX + (sample.xOffset - filteredFaceX) * faceSmoothing
+        filteredFaceY = filteredFaceY + (sample.yOffset - filteredFaceY) * faceSmoothing
+    }
+
     private func updateFilteredHeading(with sample: HeadingSample) {
         guard sample.isAvailable else { return }
 
@@ -141,7 +206,17 @@ final class ControlViewModel: ObservableObject {
         filteredHeadingDegrees = current + delta * headingSmoothing
     }
 
+    private func attemptTracking() {
+        switch trackingMode {
+        case .faceTracking:
+            attemptFaceTracking()
+        case .northHold:
+            attemptAutoHold()
+        }
+    }
+
     private func attemptAutoHold() {
+        guard trackingMode == .northHold else { return }
         guard autoHoldEnabled else { return }
         guard !isSending else { return }
         guard let host = validatedHost else { return }
@@ -176,10 +251,147 @@ final class ControlViewModel: ObservableObject {
         }
     }
 
+    private func attemptFaceTracking() {
+        guard trackingMode == .faceTracking else { return }
+        guard !isSending else { return }
+        guard let host = validatedHost else { return }
+        guard faceTracking.isAvailable else { return }
+
+        let now = Date()
+        if faceTracking.faceDetected {
+            lastFaceSeenTime = now
+            faceSearchStatus = "Tracking face"
+            faceSearchInitialized = false
+
+            guard now.timeIntervalSince(lastFaceSendTime) >= faceSendInterval else { return }
+
+            let xError = faceTracking.xOffset
+            let yError = faceTracking.yOffset
+            faceErrorX = xError
+            faceErrorY = yError
+
+            if abs(xError) < faceDeadband, abs(yError) < faceDeadband {
+                faceCenterStableCount += 1
+                if faceCenterStableCount >= faceCenterHoldFrames {
+                    connectionMessage = "Holding face center."
+                    lastFacePanCommandDegrees = 0
+                    lastFaceTiltCommandDegrees = 0
+                }
+                return
+            }
+
+            faceCenterStableCount = 0
+
+            // Negative sign keeps the camera moving toward the face center.
+            let deltaMotor1 = -xError * facePanCorrectionGain * panDirectionSign
+            let deltaMotor2 = -yError * faceTiltCorrectionGain * tiltDirectionSign
+            let clippedMotor1 = clamp(deltaMotor1, min: -1.2, max: 1.2)
+            let clippedMotor2 = clamp(deltaMotor2, min: -1.2, max: 1.2)
+            lastFacePanCommandDegrees = clippedMotor1
+            lastFaceTiltCommandDegrees = clippedMotor2
+
+            guard abs(clippedMotor1) >= 0.02 || abs(clippedMotor2) >= 0.02 else { return }
+
+            lastFaceSendTime = now
+            Task {
+                await sendJog(host: host, deltaMotor1: clippedMotor1, deltaMotor2: clippedMotor2, message: "Tracking face.")
+            }
+            return
+        }
+
+        faceErrorX = 0
+        faceErrorY = 0
+        lastFacePanCommandDegrees = 0
+        lastFaceTiltCommandDegrees = 0
+        faceCenterStableCount = 0
+
+        guard now.timeIntervalSince(lastFaceSeenTime) >= faceLostGracePeriod else {
+            faceSearchStatus = "Brief face loss"
+            connectionMessage = "Face briefly lost."
+            return
+        }
+
+        runFaceSearch(host: host, now: now)
+    }
+
+    private func runFaceSearch(host: String, now: Date) {
+        if !faceSearchInitialized || faceSearchStatus == "Tracking face" {
+            faceSearchBasePanDegrees = lastStatus?.motor1.currentDeg ?? 0
+            faceSearchBaseTiltDegrees = 70
+            faceSearchPanOffset = -faceSearchPanRange
+            faceSearchPanDirection = 1
+            faceSearchTiltTargetDegrees = 70
+            faceSearchStatus = "Searching face"
+            faceSearchInitialized = true
+
+            lastFaceSearchStepTime = now
+            Task {
+                await sendMove(
+                    host: host,
+                    motor1: faceSearchBasePanDegrees + faceSearchPanOffset,
+                    motor2: 70,
+                    message: "Searching face."
+                )
+            }
+            return
+        }
+
+        guard now.timeIntervalSince(lastFaceSearchStepTime) >= faceSearchStepInterval else { return }
+        lastFaceSearchStepTime = now
+
+        if let currentTilt = lastStatus?.motor2.currentDeg, abs(currentTilt - 70) > 1.0 {
+            faceSearchStatus = "Searching face: setting tilt to 70°"
+            Task {
+                await sendMove(
+                    host: host,
+                    motor1: faceSearchBasePanDegrees + faceSearchPanOffset,
+                    motor2: 70,
+                    message: "Searching face."
+                )
+            }
+            return
+        }
+
+        faceSearchPanOffset += faceSearchPanDirection * faceSearchPanStep
+
+        if faceSearchPanOffset >= faceSearchPanRange {
+            faceSearchPanOffset = faceSearchPanRange
+            faceSearchPanDirection = -1
+        } else if faceSearchPanOffset <= -faceSearchPanRange {
+            faceSearchPanOffset = -faceSearchPanRange
+            faceSearchPanDirection = 1
+        }
+
+        faceSearchStatus = "Searching face: pan sweep at 70°"
+        Task {
+            await sendMove(
+                host: host,
+                motor1: faceSearchBasePanDegrees + faceSearchPanOffset,
+                motor2: 70,
+                message: "Searching face."
+            )
+        }
+    }
+
     private func sendJog(host: String, deltaMotor1: Double, deltaMotor2: Double, message: String) async {
         do {
             isSending = true
             let status = try await client.jog(host: host, delta1: deltaMotor1, delta2: deltaMotor2)
+            lastStatus = status
+            lastErrorMessage = nil
+            connectionMessage = message
+        } catch {
+            lastErrorMessage = error.localizedDescription
+            connectionMessage = "Command failed."
+        }
+
+        isSending = false
+    }
+
+    private func sendMove(host: String, motor1: Double, motor2: Double, message: String) async {
+        do {
+            isSending = true
+            let status = try await client.move(host: host, motor1: motor1, motor2: motor2)
             lastStatus = status
             lastErrorMessage = nil
             connectionMessage = message
@@ -231,7 +443,7 @@ final class ControlViewModel: ObservableObject {
         calibrationMessage = "Direction calibration complete."
         if wasEnabled {
             autoHoldEnabled = true
-            attemptAutoHold()
+            attemptTracking()
         }
 
         hasAutoCalibrated = true
