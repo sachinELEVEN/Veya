@@ -52,14 +52,17 @@ final class ControlViewModel: ObservableObject {
     private let faceSearchStepInterval: TimeInterval = 0.9
     private let faceLostGracePeriod: TimeInterval = 0.35
     private let faceCenterHoldFrames = 3
+    private let motor2PitchMinDegrees: Double = 0
+    private let motor2PitchMaxDegrees: Double = 83
+    private let motor2TestStepDegrees: Double = 5
     private var lastSendTime = Date.distantPast
     private var lastFaceSendTime = Date.distantPast
     private var lastFaceSeenTime = Date.distantPast
     private var faceSearchBasePanDegrees: Double = 0
-    private var faceSearchBaseTiltDegrees: Double = 70
+    private var faceSearchBaseTiltDegrees: Double = 0
     private var faceSearchPanOffset: Double = 0
     private var faceSearchPanDirection: Double = 1
-    private var faceSearchTiltTargetDegrees: Double = 70
+    private var faceSearchTiltTargetDegrees: Double = 0
     private var lastFaceSearchStepTime = Date.distantPast
     private var faceCenterStableCount = 0
     private var faceSearchInitialized = false
@@ -149,13 +152,25 @@ final class ControlViewModel: ObservableObject {
 
     func captureCurrentPose() {
         desiredHeadingDegrees = currentHeadingDegrees
-        desiredPitchDegrees = motion.pitchDegrees
+        desiredPitchDegrees = clampPitch(motion.pitchDegrees)
         calibrationMessage = "Captured current pose as the hold target."
     }
 
     func calibrateMotorPolarity() {
         Task {
             await runPolarityCalibration()
+        }
+    }
+
+    func pitchUpTest() {
+        Task {
+            await jogMotor2TowardMin()
+        }
+    }
+
+    func pitchDownTest() {
+        Task {
+            await jogMotor2TowardMax()
         }
     }
 
@@ -236,7 +251,7 @@ final class ControlViewModel: ObservableObject {
         guard now.timeIntervalSince(lastSendTime) >= sendInterval else { return }
 
         let deltaMotor1 = panDirectionSign * headingError * panCorrectionGain
-        let deltaMotor2 = tiltDirectionSign * pitchError * tiltCorrectionGain
+        let deltaMotor2 = limitedMotor2Delta(desiredDelta: tiltDirectionSign * pitchError * tiltCorrectionGain)
 
         let clippedMotor1 = clamp(deltaMotor1, min: -4.0, max: 4.0)
         let clippedMotor2 = clamp(deltaMotor2, min: -4.0, max: 4.0)
@@ -284,7 +299,7 @@ final class ControlViewModel: ObservableObject {
 
             // Negative sign keeps the camera moving toward the face center.
             let deltaMotor1 = -xError * facePanCorrectionGain * panDirectionSign
-            let deltaMotor2 = -yError * faceTiltCorrectionGain * tiltDirectionSign
+            let deltaMotor2 = limitedMotor2Delta(desiredDelta: -yError * faceTiltCorrectionGain * tiltDirectionSign)
             let clippedMotor1 = clamp(deltaMotor1, min: -1.2, max: 1.2)
             let clippedMotor2 = clamp(deltaMotor2, min: -1.2, max: 1.2)
             lastFacePanCommandDegrees = clippedMotor1
@@ -316,11 +331,11 @@ final class ControlViewModel: ObservableObject {
 
     private func runFaceSearch(host: String, now: Date) {
         if !faceSearchInitialized || faceSearchStatus == "Tracking face" {
-            faceSearchBasePanDegrees = lastStatus?.motor1.currentDeg ?? 0
-            faceSearchBaseTiltDegrees = 70
+            faceSearchBasePanDegrees = currentHeadingDegrees
+            faceSearchBaseTiltDegrees = clampPitch(motion.pitchDegrees)
             faceSearchPanOffset = -faceSearchPanRange
             faceSearchPanDirection = 1
-            faceSearchTiltTargetDegrees = 70
+            faceSearchTiltTargetDegrees = faceSearchBaseTiltDegrees
             faceSearchStatus = "Searching face"
             faceSearchInitialized = true
 
@@ -329,7 +344,7 @@ final class ControlViewModel: ObservableObject {
                 await sendMove(
                     host: host,
                     motor1: faceSearchBasePanDegrees + faceSearchPanOffset,
-                    motor2: 70,
+                    motor2: faceSearchTiltTargetDegrees,
                     message: "Searching face."
                 )
             }
@@ -339,18 +354,8 @@ final class ControlViewModel: ObservableObject {
         guard now.timeIntervalSince(lastFaceSearchStepTime) >= faceSearchStepInterval else { return }
         lastFaceSearchStepTime = now
 
-        if let currentTilt = lastStatus?.motor2.currentDeg, abs(currentTilt - 70) > 1.0 {
-            faceSearchStatus = "Searching face: setting tilt to 70°"
-            Task {
-                await sendMove(
-                    host: host,
-                    motor1: faceSearchBasePanDegrees + faceSearchPanOffset,
-                    motor2: 70,
-                    message: "Searching face."
-                )
-            }
-            return
-        }
+        let liveTiltTarget = clampPitch(motion.pitchDegrees)
+        faceSearchTiltTargetDegrees = liveTiltTarget
 
         faceSearchPanOffset += faceSearchPanDirection * faceSearchPanStep
 
@@ -362,12 +367,12 @@ final class ControlViewModel: ObservableObject {
             faceSearchPanDirection = 1
         }
 
-        faceSearchStatus = "Searching face: pan sweep at 70°"
+        faceSearchStatus = "Searching face: pan sweep at phone pitch"
         Task {
             await sendMove(
                 host: host,
                 motor1: faceSearchBasePanDegrees + faceSearchPanOffset,
-                motor2: 70,
+                motor2: liveTiltTarget,
                 message: "Searching face."
             )
         }
@@ -376,7 +381,8 @@ final class ControlViewModel: ObservableObject {
     private func sendJog(host: String, deltaMotor1: Double, deltaMotor2: Double, message: String) async {
         do {
             isSending = true
-            let status = try await client.jog(host: host, delta1: deltaMotor1, delta2: deltaMotor2)
+            let boundedDelta2 = limitedMotor2Delta(desiredDelta: deltaMotor2)
+            let status = try await client.jog(host: host, delta1: deltaMotor1, delta2: boundedDelta2)
             lastStatus = status
             lastErrorMessage = nil
             connectionMessage = message
@@ -391,7 +397,7 @@ final class ControlViewModel: ObservableObject {
     private func sendMove(host: String, motor1: Double, motor2: Double, message: String) async {
         do {
             isSending = true
-            let status = try await client.move(host: host, motor1: motor1, motor2: motor2)
+            let status = try await client.move(host: host, motor1: motor1, motor2: clampPitch(motor2))
             lastStatus = status
             lastErrorMessage = nil
             connectionMessage = message
@@ -427,14 +433,7 @@ final class ControlViewModel: ObservableObject {
         }
 
         calibrationMessage = "Calibrating motor 2..."
-        let tiltSign = await calibrateAxis(
-            host: host,
-            motor1Delta: 0,
-            motor2Delta: 8,
-            expectedSensorDelta: {
-                self.motion.pitchDegrees - $0
-            }
-        )
+        let tiltSign = await calibrateMotor2PitchSign(host: host)
 
         if let tiltSign {
             tiltDirectionSign = tiltSign
@@ -447,6 +446,64 @@ final class ControlViewModel: ObservableObject {
         }
 
         hasAutoCalibrated = true
+    }
+
+    private func calibrateMotor2PitchSign(host: String) async -> Double? {
+        let baselinePitch = motion.pitchDegrees
+
+        do {
+            isSending = true
+            let probeDelta: Double = 8
+
+            _ = try await client.jog(host: host, delta1: 0, delta2: probeDelta)
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+
+            let pitchAfterPositiveMove = motion.pitchDegrees
+            let positiveDelta = pitchAfterPositiveMove - baselinePitch
+
+            _ = try await client.jog(host: host, delta1: 0, delta2: -2 * probeDelta)
+            try await Task.sleep(nanoseconds: 600_000_000)
+
+            let pitchAfterNegativeMove = motion.pitchDegrees
+            let negativeDelta = pitchAfterNegativeMove - baselinePitch
+
+            _ = try await client.jog(host: host, delta1: 0, delta2: probeDelta)
+            try await Task.sleep(nanoseconds: 600_000_000)
+
+            let sign: Double
+            if abs(positiveDelta) >= abs(negativeDelta), abs(positiveDelta) > 0.5 {
+                sign = positiveDelta > 0 ? 1 : -1
+                let direction = positiveDelta > 0 ? "increased" : "decreased"
+                calibrationMessage = String(
+                    format: "Motor 2 +%.0f° %@ pitch by %.1f°. Then -%.0f° changed it by %.1f°.",
+                    probeDelta,
+                    direction,
+                    abs(positiveDelta),
+                    probeDelta,
+                    negativeDelta
+                )
+            } else if abs(negativeDelta) > 0.5 {
+                sign = negativeDelta > 0 ? -1 : 1
+                let direction = negativeDelta > 0 ? "increased" : "decreased"
+                calibrationMessage = String(
+                    format: "Motor 2 -%.0f° %@ pitch by %.1f°.",
+                    probeDelta,
+                    direction,
+                    abs(negativeDelta)
+                )
+            } else {
+                sign = 0
+                calibrationMessage = "Motor 2 pitch change was too small to measure."
+            }
+
+            isSending = false
+            return sign == 0 ? nil : sign
+        } catch {
+            isSending = false
+            lastErrorMessage = error.localizedDescription
+            calibrationMessage = "Motor 2 calibration failed."
+            return nil
+        }
     }
 
     private func calibrateAxis(
@@ -475,7 +532,7 @@ final class ControlViewModel: ObservableObject {
             if motor1Delta != 0 {
                 _ = try await client.jog(host: host, delta1: -motor1Delta, delta2: 0)
             } else {
-                _ = try await client.jog(host: host, delta1: 0, delta2: -motor2Delta)
+                _ = try await client.jog(host: host, delta1: 0, delta2: limitedMotor2Delta(desiredDelta: -motor2Delta))
             }
 
             try await Task.sleep(nanoseconds: 600_000_000)
@@ -487,5 +544,54 @@ final class ControlViewModel: ObservableObject {
             calibrationMessage = "Calibration failed."
             return nil
         }
+    }
+
+    private func clampPitch(_ value: Double) -> Double {
+        clamp(value, min: motor2PitchMinDegrees, max: motor2PitchMaxDegrees)
+    }
+
+    private func limitedMotor2Delta(desiredDelta: Double) -> Double {
+        return limitedMotor2Delta(from: motion.pitchDegrees, desiredDelta: desiredDelta)
+    }
+
+    private func limitedMotor2Delta(from current: Double, desiredDelta: Double) -> Double {
+        let target = clampPitch(current + desiredDelta)
+        return target - current
+    }
+
+    private func jogMotor2TowardMin() async {
+        guard let host = validatedHost else {
+            connectionMessage = "Enter the ESP8266 IP address first."
+            return
+        }
+
+        let current = motion.pitchDegrees
+        let target = clampPitch(current - motor2TestStepDegrees)
+        let delta = target - current
+
+        guard abs(delta) > 0.001 else {
+            connectionMessage = "Motor 2 already at lower limit."
+            return
+        }
+
+        await sendJog(host: host, deltaMotor1: 0, deltaMotor2: delta, message: "Pitch moved toward 0°.")
+    }
+
+    private func jogMotor2TowardMax() async {
+        guard let host = validatedHost else {
+            connectionMessage = "Enter the ESP8266 IP address first."
+            return
+        }
+
+        let current = motion.pitchDegrees
+        let target = clampPitch(current + motor2TestStepDegrees)
+        let delta = target - current
+
+        guard abs(delta) > 0.001 else {
+            connectionMessage = "Motor 2 already at upper limit."
+            return
+        }
+
+        await sendJog(host: host, deltaMotor1: 0, deltaMotor2: delta, message: "Pitch moved toward 83°.")
     }
 }

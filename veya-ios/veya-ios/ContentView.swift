@@ -212,6 +212,30 @@ struct ContentView: View {
                 .font(.system(size: 15, weight: .regular, design: .rounded))
                 .foregroundStyle(.white.opacity(0.78))
 
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Motor 2 pitch test")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.92))
+
+                Text("Up moves pitch toward 0° and down moves pitch toward 83°.")
+                    .font(.system(size: 13, weight: .regular, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.70))
+
+                Text("Live pitch sensor: \(viewModel.motion.pitchDegrees, format: .number.precision(.fractionLength(1)))°")
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.72))
+
+                HStack(spacing: 10) {
+                    button("Up", systemImage: "arrow.up.circle", tint: .teal) {
+                        viewModel.pitchUpTest()
+                    }
+
+                    button("Down", systemImage: "arrow.down.circle", tint: .orange) {
+                        viewModel.pitchDownTest()
+                    }
+                }
+            }
+
             HStack(spacing: 10) {
                 button("Calibrate Motor Signs", systemImage: "arrow.left.arrow.right", tint: .mint) {
                     viewModel.calibrateMotorPolarity()
