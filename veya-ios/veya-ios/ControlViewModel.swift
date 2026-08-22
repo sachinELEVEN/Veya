@@ -44,13 +44,15 @@ final class ControlViewModel: ObservableObject {
     private let faceTiltCorrectionGain: Double = 0.50
     private let deadbandHeading: Double = 5.0
     private let deadbandPitch: Double = 5.0
-    private let faceDeadband: Double = 0.30
+    private let faceDeadband: Double = 0.22
+    private let faceLockedPanMoveThreshold: Double = 0.12
+    private let faceLockedPitchMoveThreshold: Double = 0.30
     private let sendInterval: TimeInterval = 0.10
     private let faceSendInterval: TimeInterval = 0.08
     private let headingSmoothing: Double = 0.22
     private let faceSmoothing: Double = 0.30
     private let faceSearchPanRange: Double = 135
-    private let faceSearchPanSpeedDegreesPerSecond: Double = 20
+    private let faceSearchPanSpeedDegreesPerSecond: Double = 30
     private let faceSearchLoopTick: UInt64 = 50_000_000
     private let faceSearchRetryInterval: TimeInterval = 5.0
     private let faceLostGracePeriod: TimeInterval = 2.5
@@ -316,7 +318,9 @@ final class ControlViewModel: ObservableObject {
             faceErrorX = xError
             faceErrorY = yError
 
-            let faceMovedEnough = abs(xError - lastFaceLockXOffset) > 0.12 || abs(yError - lastFaceLockYOffset) > 0.12
+            let panMovedEnough = abs(xError - lastFaceLockXOffset) > faceLockedPanMoveThreshold
+            let pitchMovedEnough = abs(yError - lastFaceLockYOffset) > faceLockedPitchMoveThreshold
+            let faceMovedEnough = panMovedEnough || pitchMovedEnough
 
             if faceLockedOnTarget, !faceMovedEnough {
                 log.debug("Face locked, below movement threshold x=\(xError, privacy: .public) y=\(yError, privacy: .public) lastX=\(self.lastFaceLockXOffset, privacy: .public) lastY=\(self.lastFaceLockYOffset, privacy: .public)")
@@ -329,7 +333,7 @@ final class ControlViewModel: ObservableObject {
             lastFaceLockYOffset = yError
 
             let coarseX = clamp(xError, min: -0.65, max: 0.65)
-            let coarseY = clamp(yError, min: -0.45, max: 0.45)
+            let coarseY = pitchMovedEnough || !faceLockedOnTarget ? clamp(yError, min: -0.45, max: 0.45) : 0
             let deltaMotor1 = -coarseX * facePanCorrectionGain * panDirectionSign
             let deltaMotor2 = limitedMotor2Delta(desiredDelta: -coarseY * faceTiltCorrectionGain * tiltDirectionSign)
             let clippedMotor1 = clamp(deltaMotor1, min: -3.0, max: 3.0)
@@ -338,7 +342,7 @@ final class ControlViewModel: ObservableObject {
             lastFaceTiltCommandDegrees = clippedMotor2
             log.debug("Face command x=\(xError, privacy: .public) y=\(yError, privacy: .public) coarseX=\(coarseX, privacy: .public) coarseY=\(coarseY, privacy: .public) d1=\(clippedMotor1, privacy: .public) d2=\(clippedMotor2, privacy: .public)")
 
-            guard abs(clippedMotor1) >= 0.05 || abs(clippedMotor2) >= 0.05 else {
+            guard abs(clippedMotor1) >= faceDeadband || abs(clippedMotor2) >= faceDeadband else {
                 log.debug("Face command suppressed below threshold.")
                 connectionMessage = "Face found. Holding."
                 return
