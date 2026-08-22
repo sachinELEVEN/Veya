@@ -50,7 +50,7 @@ final class ControlViewModel: ObservableObject {
     private let headingSmoothing: Double = 0.22
     private let faceSmoothing: Double = 0.30
     private let faceSearchPanRange: Double = 135
-    private let faceSearchPanSpeedDegreesPerSecond: Double = 10
+    private let faceSearchPanSpeedDegreesPerSecond: Double = 20
     private let faceSearchLoopTick: UInt64 = 50_000_000
     private let faceSearchRetryInterval: TimeInterval = 5.0
     private let faceLostGracePeriod: TimeInterval = 0.35
