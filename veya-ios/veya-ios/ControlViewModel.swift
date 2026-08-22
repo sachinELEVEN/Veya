@@ -4,7 +4,7 @@ import SwiftUI
 
 @MainActor
 final class ControlViewModel: ObservableObject {
-    @Published var espHost: String = ""
+    @Published var espHost: String = UserDefaults.standard.string(forKey: "veya.espHost") ?? ""
     @Published var motion: MotionSample = .zero
     @Published var heading: HeadingSample = .zero
     @Published var autoHoldEnabled = false
@@ -22,18 +22,19 @@ final class ControlViewModel: ObservableObject {
     @Published var lastStatus: ESP8266Status?
     @Published var lastErrorMessage: String?
     @Published var isSending = false
+    @Published var hasAutoCalibrated = false
 
     private let client = ESP8266Client()
     private let motionCoordinator = MotionCoordinator()
     private let headingCoordinator = HeadingCoordinator()
-    private let panCorrectionGain: Double = 0.45
-    private let tiltCorrectionGain: Double = 0.20
-    private let deadbandHeading: Double = 6.0
-    private let deadbandPitch: Double = 1.5
-    private let panStepDegrees: Double = 3.0
-    private let sendInterval: TimeInterval = 0.45
+    private let panCorrectionGain: Double = 0.14
+    private let tiltCorrectionGain: Double = 0.12
+    private let deadbandHeading: Double = 5.0
+    private let deadbandPitch: Double = 5.0
+    private let sendInterval: TimeInterval = 0.10
     private let headingSmoothing: Double = 0.22
     private var lastSendTime = Date.distantPast
+    private var pendingStartupCalibration = false
 
     init() {
         motionCoordinator.onUpdate = { [weak self] sample in
@@ -49,10 +50,17 @@ final class ControlViewModel: ObservableObject {
 
         motionCoordinator.start()
         headingCoordinator.start()
+
+        if validatedHost != nil {
+            pendingStartupCalibration = true
+        }
     }
 
     func connect() {
-        Task { await refreshStatus() }
+        Task {
+            await refreshStatus()
+            await runStartupCalibrationIfNeeded()
+        }
     }
 
     func refreshStatus() async {
@@ -61,11 +69,14 @@ final class ControlViewModel: ObservableObject {
             return
         }
 
+        UserDefaults.standard.set(host, forKey: "veya.espHost")
+
         do {
             let status = try await client.health(host: host)
             lastStatus = status
             lastErrorMessage = nil
             connectionMessage = "Connected to \(status.ip ?? host)"
+            pendingStartupCalibration = true
         } catch {
             lastErrorMessage = error.localizedDescription
             connectionMessage = "Connection failed."
@@ -98,6 +109,13 @@ final class ControlViewModel: ObservableObject {
         Task {
             await runPolarityCalibration()
         }
+    }
+
+    func runStartupCalibrationIfNeeded() async {
+        guard pendingStartupCalibration else { return }
+        guard validatedHost != nil else { return }
+        pendingStartupCalibration = false
+        await runPolarityCalibration()
     }
 
     private var validatedHost: String? {
@@ -142,16 +160,15 @@ final class ControlViewModel: ObservableObject {
         let now = Date()
         guard now.timeIntervalSince(lastSendTime) >= sendInterval else { return }
 
-        let panMagnitude = min(max(abs(headingError) * panCorrectionGain, panStepDegrees), panStepDegrees * 2.0)
-        let deltaMotor1 = panDirectionSign * (headingError > 0 ? panMagnitude : -panMagnitude)
+        let deltaMotor1 = panDirectionSign * headingError * panCorrectionGain
         let deltaMotor2 = tiltDirectionSign * pitchError * tiltCorrectionGain
 
-        let clippedMotor1 = clamp(deltaMotor1, min: -panStepDegrees * 2.0, max: panStepDegrees * 2.0)
-        let clippedMotor2 = clamp(deltaMotor2, min: -18, max: 18)
+        let clippedMotor1 = clamp(deltaMotor1, min: -4.0, max: 4.0)
+        let clippedMotor2 = clamp(deltaMotor2, min: -4.0, max: 4.0)
         lastPanCommandDegrees = clippedMotor1
         lastTiltCommandDegrees = clippedMotor2
 
-        guard abs(clippedMotor1) >= 0.15 || abs(clippedMotor2) >= 0.15 else { return }
+        guard abs(clippedMotor1) >= 0.05 || abs(clippedMotor2) >= 0.05 else { return }
 
         lastSendTime = now
         Task {
@@ -216,6 +233,8 @@ final class ControlViewModel: ObservableObject {
             autoHoldEnabled = true
             attemptAutoHold()
         }
+
+        hasAutoCalibrated = true
     }
 
     private func calibrateAxis(

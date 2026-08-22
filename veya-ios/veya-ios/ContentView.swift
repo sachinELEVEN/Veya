@@ -19,6 +19,9 @@ struct ContentView: View {
                 .padding(16)
             }
         }
+        .onAppear {
+            viewModel.connect()
+        }
     }
 
     private var background: some View {
