@@ -50,8 +50,9 @@ final class ControlViewModel: ObservableObject {
     private let headingSmoothing: Double = 0.22
     private let faceSmoothing: Double = 0.30
     private let faceSearchPanRange: Double = 135
-    private let faceSearchPanStep: Double = 45
-    private let faceSearchStepInterval: TimeInterval = 2.0
+    private let faceSearchPanSpeedDegreesPerSecond: Double = 10
+    private let faceSearchLoopTick: UInt64 = 50_000_000
+    private let faceSearchRetryInterval: TimeInterval = 5.0
     private let faceLostGracePeriod: TimeInterval = 0.35
     private let faceCenterHoldFrames = 3
     private let motor2PitchMinDegrees: Double = 0
@@ -66,9 +67,10 @@ final class ControlViewModel: ObservableObject {
     private var faceSearchPanOffset: Double = 0
     private var faceSearchPanDirection: Double = 1
     private var faceSearchTiltTargetDegrees: Double = 0
-    private var lastFaceSearchStepTime = Date.distantPast
+    private var faceSearchLegsCompleted: Int = 0
     private var faceCenterStableCount = 0
     private var faceSearchInitialized = false
+    private var faceSearchLoopTask: Task<Void, Never>?
     private var faceLockedOnTarget = false
     private var lastFaceLockXOffset: Double = 0
     private var lastFaceLockYOffset: Double = 0
@@ -294,6 +296,7 @@ final class ControlViewModel: ObservableObject {
         if faceTracking.faceDetected {
             lastFaceSeenTime = now
             faceSearchStatus = "Face found"
+            stopFaceSearchLoop()
 
             let sinceLastFaceSend = now.timeIntervalSince(lastFaceSendTime)
             guard sinceLastFaceSend >= faceSendInterval else {
@@ -359,63 +362,124 @@ final class ControlViewModel: ObservableObject {
             return
         }
 
-        runFaceSearch(host: host, now: now)
+        startFaceSearchLoop(host: host)
     }
 
-    private func runFaceSearch(host: String, now: Date) {
-        if !faceSearchInitialized || faceSearchStatus == "Tracking face" {
+    private func startFaceSearchLoop(host: String) {
+        guard faceSearchLoopTask == nil else {
+            return
+        }
+
+        faceSearchLoopTask = Task { [weak self] in
+            guard let self else { return }
+            await self.runFaceSearchLoop(host: host)
+        }
+    }
+
+    private func stopFaceSearchLoop() {
+        faceSearchLoopTask?.cancel()
+        faceSearchLoopTask = nil
+    }
+
+    private func runFaceSearchLoop(host: String) async {
+        if !faceSearchInitialized {
             faceSearchBasePanDegrees = currentHeadingDegrees
             faceSearchBaseTiltDegrees = clampPitch(70)
             faceSearchPanOffset = -faceSearchPanRange
             faceSearchPanDirection = 1
+            faceSearchLegsCompleted = 0
             faceSearchTiltTargetDegrees = faceSearchBaseTiltDegrees
             faceSearchStatus = "Searching face at 70°"
             faceSearchInitialized = true
             log.debug("Face search init basePan=\(self.faceSearchBasePanDegrees, privacy: .public) baseTilt=\(self.faceSearchBaseTiltDegrees, privacy: .public) panOffset=\(self.faceSearchPanOffset, privacy: .public) panDir=\(self.faceSearchPanDirection, privacy: .public)")
 
-            lastFaceSearchStepTime = now
             log.debug("Face search initial move sending.")
-            Task {
-                await sendMove(
-                    host: host,
-                    motor1: faceSearchBasePanDegrees + faceSearchPanOffset,
-                    motor2: faceSearchTiltTargetDegrees,
-                    message: "Searching face."
-                )
-            }
-            return
-        }
-
-        let elapsed = now.timeIntervalSince(lastFaceSearchStepTime)
-        guard elapsed >= faceSearchStepInterval else {
-            log.debug("Face search step skipped elapsed=\(elapsed, privacy: .public)s wait=\(self.faceSearchStepInterval, privacy: .public)s")
-            return
-        }
-        lastFaceSearchStepTime = now
-
-        let liveTiltTarget = clampPitch(70)
-        faceSearchTiltTargetDegrees = liveTiltTarget
-
-        faceSearchPanOffset += faceSearchPanDirection * faceSearchPanStep
-
-        if faceSearchPanOffset >= faceSearchPanRange {
-            faceSearchPanOffset = faceSearchPanRange
-            faceSearchPanDirection = -1
-        } else if faceSearchPanOffset <= -faceSearchPanRange {
-            faceSearchPanOffset = -faceSearchPanRange
-            faceSearchPanDirection = 1
-        }
-
-        faceSearchStatus = "Searching face: sweeping at 70°"
-        log.debug("Face search sweep targetPan=\(self.faceSearchBasePanDegrees + self.faceSearchPanOffset, privacy: .public) targetTilt=\(liveTiltTarget, privacy: .public) panOffset=\(self.faceSearchPanOffset, privacy: .public) panDir=\(self.faceSearchPanDirection, privacy: .public)")
-        Task {
             await sendMove(
                 host: host,
                 motor1: faceSearchBasePanDegrees + faceSearchPanOffset,
-                motor2: liveTiltTarget,
+                motor2: faceSearchTiltTargetDegrees,
                 message: "Searching face."
             )
         }
+
+        let tickSeconds = Double(faceSearchLoopTick) / 1_000_000_000.0
+
+        while !Task.isCancelled {
+            guard trackingMode == .faceTracking else { break }
+            guard !faceTracking.faceDetected else { break }
+
+            try? await Task.sleep(nanoseconds: faceSearchLoopTick)
+            guard !Task.isCancelled else { break }
+            guard !faceTracking.faceDetected else { break }
+
+            let step = faceSearchPanDirection * faceSearchPanSpeedDegreesPerSecond * tickSeconds
+            var nextOffset = faceSearchPanOffset + step
+
+            if nextOffset >= faceSearchPanRange {
+                nextOffset = faceSearchPanRange
+                faceSearchPanDirection = -1
+                faceSearchLegsCompleted += 1
+            } else if nextOffset <= -faceSearchPanRange {
+                nextOffset = -faceSearchPanRange
+                faceSearchPanDirection = 1
+                faceSearchLegsCompleted += 1
+            }
+
+            let appliedStep = nextOffset - faceSearchPanOffset
+            faceSearchPanOffset = nextOffset
+            faceSearchTiltTargetDegrees = clampPitch(70)
+            faceSearchStatus = "Searching face: sweeping at 70°"
+            log.debug("Face search sweep step=\(appliedStep, privacy: .public) targetPan=\(self.faceSearchBasePanDegrees + self.faceSearchPanOffset, privacy: .public) targetTilt=\(self.faceSearchTiltTargetDegrees, privacy: .public) panOffset=\(self.faceSearchPanOffset, privacy: .public) panDir=\(self.faceSearchPanDirection, privacy: .public)")
+
+            await sendJog(
+                host: host,
+                deltaMotor1: appliedStep,
+                deltaMotor2: 0,
+                message: "Searching face."
+            )
+
+            guard faceSearchLegsCompleted >= 2 else {
+                continue
+            }
+
+            faceSearchLegsCompleted = 0
+            faceSearchStatus = "No face found. Retrying in 5s."
+            log.debug("Face search sweep completed without a face; waiting \(self.faceSearchRetryInterval, privacy: .public)s before retry.")
+
+            var remainingDelay = faceSearchRetryInterval
+            while remainingDelay > 0, !Task.isCancelled {
+                if faceTracking.faceDetected || trackingMode != .faceTracking {
+                    break
+                }
+
+                let chunk = min(1.0, remainingDelay)
+                try? await Task.sleep(nanoseconds: UInt64(chunk * 1_000_000_000))
+                remainingDelay -= chunk
+            }
+
+            guard !Task.isCancelled else { break }
+            guard trackingMode == .faceTracking else { break }
+            guard !faceTracking.faceDetected else { break }
+
+            faceSearchBasePanDegrees = currentHeadingDegrees
+            faceSearchPanOffset = -faceSearchPanRange
+            faceSearchPanDirection = 1
+            faceSearchTiltTargetDegrees = clampPitch(70)
+            faceSearchStatus = "Retrying face search at 70°"
+            log.debug("Face search retrying basePan=\(self.faceSearchBasePanDegrees, privacy: .public) baseTilt=\(self.faceSearchBaseTiltDegrees, privacy: .public) panOffset=\(self.faceSearchPanOffset, privacy: .public)")
+            await sendMove(
+                host: host,
+                motor1: faceSearchBasePanDegrees + faceSearchPanOffset,
+                motor2: faceSearchTiltTargetDegrees,
+                message: "Searching face."
+            )
+        }
+
+        if !Task.isCancelled {
+            log.debug("Face search loop ended.")
+        }
+
+        faceSearchLoopTask = nil
     }
 
     private func sendJog(host: String, deltaMotor1: Double, deltaMotor2: Double, message: String) async {
