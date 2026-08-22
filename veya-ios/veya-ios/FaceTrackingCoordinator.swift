@@ -66,7 +66,7 @@ final class FaceTrackingCoordinator: NSObject, AVCaptureVideoDataOutputSampleBuf
             isConfigured = true
         }
 
-        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front),
+        guard let camera = preferredFrontCamera(),
               let input = try? AVCaptureDeviceInput(device: camera),
               session.canAddInput(input) else {
             publishUnavailable("Front camera unavailable.")
@@ -94,6 +94,20 @@ final class FaceTrackingCoordinator: NSObject, AVCaptureVideoDataOutputSampleBuf
             connection.videoOrientation = .portrait
             connection.isVideoMirrored = true
         }
+    }
+
+    private func preferredFrontCamera() -> AVCaptureDevice? {
+        let discovery = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [
+                .builtInUltraWideCamera,
+                .builtInTrueDepthCamera,
+                .builtInWideAngleCamera
+            ],
+            mediaType: .video,
+            position: .front
+        )
+
+        return discovery.devices.first
     }
 
     private func publishUnavailable(_ message: String) {
