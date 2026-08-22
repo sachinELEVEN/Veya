@@ -55,7 +55,7 @@ final class ControlViewModel: ObservableObject {
     private let faceSearchPanSpeedDegreesPerSecond: Double = 30
     private let faceSearchLoopTick: UInt64 = 50_000_000
     private let faceSearchRetryInterval: TimeInterval = 5.0
-    private let faceLostGracePeriod: TimeInterval = 2.5
+    private let faceLostGracePeriod: TimeInterval = 5
     private let faceCenterHoldFrames = 3
     private let motor2PitchMinDegrees: Double = 0
     private let motor2PitchMaxDegrees: Double = 83
@@ -530,17 +530,10 @@ final class ControlViewModel: ObservableObject {
         hasAutoCalibrated = false
 
         calibrationMessage = "Calibrating motor 1..."
-        let panSign = await calibrateAxis(
-            host: host,
-            motor1Delta: 8,
-            motor2Delta: 0,
-            expectedSensorDelta: {
-                normalizeAngleDegrees(self.currentHeadingDegrees - $0)
-            }
-        )
+        let panSign = await calibrateMotor1PanSign(host: host)
 
         if let panSign {
-            panDirectionSign = panSign
+            panDirectionSign = -panSign
         }
 
         calibrationMessage = "Calibrating motor 2..."
@@ -617,42 +610,73 @@ final class ControlViewModel: ObservableObject {
         }
     }
 
-    private func calibrateAxis(
-        host: String,
-        motor1Delta: Double,
-        motor2Delta: Double,
-        expectedSensorDelta: @escaping (Double) -> Double
-    ) async -> Double? {
-        let baseline = motor1Delta != 0 ? currentHeadingDegrees : motion.pitchDegrees
+    private func calibrateMotor1PanSign(host: String) async -> Double? {
+        guard heading.isAvailable else {
+            calibrationMessage = "Heading sensor unavailable."
+            return nil
+        }
+
+        let probeDelta: Double = 10
+        let settleDelay: UInt64 = 900_000_000
+        let restoreDelay: UInt64 = 600_000_000
 
         do {
             isSending = true
-            _ = try await client.jog(host: host, delta1: motor1Delta, delta2: motor2Delta)
-            try await Task.sleep(nanoseconds: 1_000_000_000)
 
-            let delta = expectedSensorDelta(baseline)
+            while heading.accuracyDegrees < 0 || heading.accuracyDegrees > 25 {
+                try await Task.sleep(nanoseconds: 200_000_000)
+            }
+
+            let baselineHeading = currentHeadingDegrees
+            calibrationMessage = "Motor 1 test: nudging clockwise/anticlockwise..."
+            log.debug("Motor 1 calibration baseline heading=\(baselineHeading, privacy: .public) accuracy=\(self.heading.accuracyDegrees, privacy: .public)")
+
+            _ = try await client.jog(host: host, delta1: probeDelta, delta2: 0)
+            try await Task.sleep(nanoseconds: settleDelay)
+
+            let headingAfterPositiveMove = currentHeadingDegrees
+            let positiveDelta = normalizeAngleDegrees(headingAfterPositiveMove - baselineHeading)
+
+            _ = try await client.jog(host: host, delta1: -2 * probeDelta, delta2: 0)
+            try await Task.sleep(nanoseconds: settleDelay)
+
+            let headingAfterNegativeMove = currentHeadingDegrees
+            let negativeDelta = normalizeAngleDegrees(headingAfterNegativeMove - baselineHeading)
+
+            _ = try await client.jog(host: host, delta1: probeDelta, delta2: 0)
+            try await Task.sleep(nanoseconds: restoreDelay)
+
             let sign: Double
-            if delta > 0.5 {
-                sign = 1
-            } else if delta < -0.5 {
-                sign = -1
+            if abs(positiveDelta) >= abs(negativeDelta), abs(positiveDelta) > 0.5 {
+                sign = positiveDelta > 0 ? 1 : -1
+                let direction = positiveDelta > 0 ? "clockwise/right" : "anticlockwise/left"
+                calibrationMessage = String(
+                    format: "Motor 1 +%.0f° moved %@ by %.1f°.",
+                    probeDelta,
+                    direction,
+                    abs(positiveDelta)
+                )
+            } else if abs(negativeDelta) > 0.5 {
+                sign = negativeDelta > 0 ? -1 : 1
+                let direction = negativeDelta > 0 ? "clockwise/right" : "anticlockwise/left"
+                calibrationMessage = String(
+                    format: "Motor 1 -%.0f° moved %@ by %.1f°.",
+                    probeDelta,
+                    direction,
+                    abs(negativeDelta)
+                )
             } else {
                 sign = 0
+                calibrationMessage = "Motor 1 heading change was too small to measure."
             }
 
-            if motor1Delta != 0 {
-                _ = try await client.jog(host: host, delta1: -motor1Delta, delta2: 0)
-            } else {
-                _ = try await client.jog(host: host, delta1: 0, delta2: limitedMotor2Delta(desiredDelta: -motor2Delta))
-            }
-
-            try await Task.sleep(nanoseconds: 600_000_000)
+            log.debug("Motor 1 calibration positiveDelta=\(positiveDelta, privacy: .public) negativeDelta=\(negativeDelta, privacy: .public) sign=\(sign, privacy: .public)")
             isSending = false
             return sign == 0 ? nil : sign
         } catch {
             isSending = false
             lastErrorMessage = error.localizedDescription
-            calibrationMessage = "Calibration failed."
+            calibrationMessage = "Motor 1 calibration failed."
             return nil
         }
     }
