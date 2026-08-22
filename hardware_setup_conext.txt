@@ -1,0 +1,313 @@
+PROJECT CONTEXT: 2-AXIS ROTATING iPAD STAND
+
+I am building a 2-axis mechanical rotating stand for an iPad using two NEMA17 stepper motors, two TB6600 stepper drivers, an ESP8266 NodeMCU, and a GT2 belt/pulley system.
+
+==================================================
+HARDWARE
+==================================================
+
+ESP8266:
+- NodeMCU CP2102 board
+- Powered separately through Micro-USB
+- ESP8266 GPIO output is 3.3V
+
+Stepper motors:
+- 2 × NEMA17
+- Model: 42HS48-2504AF-01
+- 1.8° step angle
+- 200 full steps/revolution
+- D-Type shaft
+- Rated torque: approximately 4.8 kg-cm
+
+Stepper drivers:
+- 2 × Two Trees TB6600 Stepper Motor Driver
+- Model/product: TB6600 4A, 9–42V, TTL, 16 micro-step
+- Each motor has its own TB6600
+
+Power:
+- 12V 5A 60W power supply
+- ESP8266 is powered separately through USB
+- Both TB6600 drivers are powered from the 12V supply
+
+Microstepping:
+- Currently using 32 microsteps on both TB6600 drivers.
+- At 32 microsteps:
+  200 × 32 = 6400 pulses/steps per motor revolution.
+
+==================================================
+MECHANICAL CONFIGURATION
+==================================================
+
+There are two axes:
+
+MOTOR 1:
+- Bottom motor.
+- Its rotation axis is perpendicular to the floor.
+- Therefore it rotates the assembly in the horizontal XY plane.
+- A second stepper motor is mounted on top of this rotating assembly.
+- Motor 1 effectively rotates the entire upper assembly around the vertical axis.
+
+MOTOR 2:
+- Mounted on top of the Motor 1 rotating assembly.
+- Its rotation axis is horizontal, i.e. perpendicular to Motor 1's axis / parallel to the ground.
+- The iPad is mounted on the rotating axis of Motor 2.
+- Motor 2 tilts/rotates the iPad.
+
+Conceptually:
+
+                    iPad
+                     │
+                     │
+                MOTOR 2 AXIS
+                  ↕ rotation
+                     │
+             ┌───────┴───────┐
+             │   MOTOR 1     │
+             │   assembly    │
+             └───────────────┘
+                    ↻
+              MOTOR 1 AXIS
+              vertical
+
+Motor 1 = horizontal/XY-plane rotation of the whole upper assembly.
+Motor 2 = tilt rotation of the iPad.
+
+Each axis should have a maximum software movement of approximately ±160°.
+However, the current tests use positions relative to a manually defined zero.
+
+==================================================
+BELT / PULLEY
+==================================================
+
+Purchased:
+- 2 × GT2 6mm 60T aluminium timing pulleys, 5mm bore
+- 4 × GT2 6mm 20T timing pulleys, 5mm bore
+- 2 × GT2 6mm 610mm closed-loop belts
+- 2 × GT2 6mm 280mm closed-loop belts
+
+The motor uses a 20T pulley driving a 60T pulley.
+
+Therefore:
+20T → 60T = 3:1 reduction.
+
+So:
+- Motor = 3 revolutions
+- Output pulley = 1 revolution
+
+At 32 microsteps:
+- Motor = 6400 steps/revolution
+- Output = 6400 × 3 = 19200 motor steps per output revolution.
+
+For the current software testing, however, angle calculations are based on the motor shaft position unless explicitly stated otherwise.
+
+==================================================
+TB6600 WIRING
+==================================================
+
+The working wiring configuration has been experimentally verified.
+
+IMPORTANT:
+Do NOT change this to a VIN/5V arrangement unless specifically testing something else.
+
+This common-cathode configuration works with the ESP8266's 3.3V GPIO outputs.
+
+MOTOR 1 / TB6600 #1:
+
+ESP8266              TB6600 #1
+
+D1 / GPIO5  ──────── PUL+
+D2 / GPIO4  ──────── DIR+
+
+GND         ──────── PUL-
+GND         ──────── DIR-
+
+ENA+        ──────── NC
+ENA-        ──────── NC
+
+
+MOTOR 2 / TB6600 #2:
+
+ESP8266              TB6600 #2
+
+D5 / GPIO14 ──────── PUL+
+D6 / GPIO12 ──────── DIR+
+
+GND         ──────── PUL-
+GND         ──────── DIR-
+
+ENA+        ──────── NC
+ENA-        ──────── NC
+
+The ESP8266 ground is common to both TB6600 control inputs.
+
+Both TB6600s receive 12V motor power from the 12V power supply.
+
+The ESP8266 remains powered separately via Micro-USB.
+
+==================================================
+DIRECTION BEHAVIOR
+==================================================
+
+For Motor 1:
+- DIR LOW = anti-clockwise
+- DIR HIGH = clockwise
+
+For Motor 2:
+- Direction behavior has not been formally documented as a physical clockwise/anticlockwise mapping yet.
+- The D5/D6 setup has been confirmed to work.
+
+Motor direction can be reversed by changing the DIR signal or motor coil wiring if needed.
+
+==================================================
+IMPORTANT DISCOVERY / TROUBLESHOOTING HISTORY
+==================================================
+
+Manual STEP/DIR code produced inconsistent behavior:
+- Sometimes the motor only rotated in one direction.
+- Sometimes it moved only a small fraction of a revolution.
+- Changing DIR and using long delays did not always reliably reverse it.
+- Increasing microstepping and changing pulse counts produced confusing behavior.
+
+However, AccelStepper solved the issue.
+
+A single-motor test using Motor 2 was:
+
+#include <AccelStepper.h>
+
+#define DIR_PIN  D6
+#define STEP_PIN D5
+
+AccelStepper stepper(AccelStepper::DRIVER, STEP_PIN, DIR_PIN);
+
+void setup()
+{
+  stepper.setMaxSpeed(6400);
+  stepper.setAcceleration(6400);
+
+  stepper.moveTo(6400);
+}
+
+void loop()
+{
+  if (stepper.distanceToGo() == 0)
+  {
+    delay(2000);
+    stepper.moveTo(-stepper.currentPosition());
+  }
+
+  stepper.run();
+}
+
+This successfully:
+- Rotated one full revolution.
+- Reversed direction.
+- Rotated back.
+- Continued repeating.
+
+Therefore:
+- ESP8266 + TB6600 works.
+- 3.3V GPIO is sufficient for this particular TB6600 setup.
+- D5/D6 works reliably.
+- AccelStepper is preferred over manually generating STEP pulses.
+- ENA is not required and is currently disconnected.
+
+==================================================
+CURRENT ACCELSTEPPER SETTINGS
+==================================================
+
+Using:
+
+#include <AccelStepper.h>
+
+AccelStepper motor1(AccelStepper::DRIVER, M1_STEP, M1_DIR);
+AccelStepper motor2(AccelStepper::DRIVER, M2_STEP, M2_DIR);
+
+Typical settings:
+
+motor1.setMaxSpeed(2000);
+motor1.setAcceleration(1000);
+
+motor2.setMaxSpeed(2000);
+motor2.setAcceleration(1000);
+
+At 32 microsteps:
+- 6400 steps = 360°
+- 2844 steps ≈ 160°
+- 1600 steps = 90°
+- 356 steps ≈ 20°
+
+The user wants smooth operation, so acceleration/deceleration should be used rather than abrupt STEP pulse changes.
+
+==================================================
+CURRENT TEST OBJECTIVE
+==================================================
+
+The desired behavior being tested is:
+
+MOTOR 2:
+1. Start at physical 0°.
+2. Move 0° → 20°.
+3. Treat 20° as Motor 2's baseline position.
+4. Then repeatedly:
+   20° → 90°
+   90° → 20°
+   20° → 90°
+   90° → 20°
+   ...
+5. Motor 2 should never go below 20° during this test.
+
+MOTOR 1:
+- Initially test:
+  0° → 160°
+  160° → 0°
+  0° → 160°
+  160° → 0°
+  ...
+- Maximum movement should be 160° from its software zero.
+
+The current testing has been sequential rather than simultaneous, but eventually both motors may need to move simultaneously.
+
+==================================================
+IMPORTANT POSITIONING NOTE
+==================================================
+
+There are currently NO physical limit switches / homing sensors.
+
+Therefore the ESP8266 does NOT inherently know the physical angle after boot/reset.
+
+When code does:
+
+motor1.setCurrentPosition(0);
+motor2.setCurrentPosition(0);
+
+it means:
+"Whatever physical position the mechanism is currently in, call that 0°."
+
+For a final production version, physical limit/homing switches should be added so the controller can establish a known zero position after startup.
+
+Software limits of ±160° should also be enforced.
+
+==================================================
+GOAL
+==================================================
+
+The eventual goal is to build a reliable 2-axis iPad motion system where I can issue commands such as:
+
+Motor 1 → +90°
+Motor 2 → +20°
+
+or:
+
+Motor 1 → -45°
+Motor 2 → +80°
+
+The system should:
+- Use AccelStepper.
+- Move smoothly with acceleration/deceleration.
+- Enforce mechanical/software limits.
+- Track both motor positions in degrees.
+- Eventually allow both motors to move simultaneously.
+- Avoid accidental movement beyond ±160°.
+- Eventually support homing/limit switches.
+
+Do not redesign the wiring unless there is a specific electrical reason. The current STEP/DIR wiring has already been experimentally verified to work.
