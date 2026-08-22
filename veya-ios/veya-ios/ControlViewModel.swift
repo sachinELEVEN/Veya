@@ -1,38 +1,49 @@
-import Foundation
 import Combine
+import Foundation
 import SwiftUI
 
 @MainActor
 final class ControlViewModel: ObservableObject {
     @Published var espHost: String = ""
     @Published var motion: MotionSample = .zero
-    @Published var zeroReference: MotionSample = .zero
-    @Published var manualTarget: StepperTarget = .lookUp
-    @Published var commandTarget: StepperTarget = .lookUp
-    @Published var liveHoldEnabled = false
+    @Published var heading: HeadingSample = .zero
+    @Published var autoHoldEnabled = false
+    @Published var desiredHeadingDegrees: Double = 0
+    @Published var desiredPitchDegrees: Double = 70
+    @Published var panDirectionSign: Double = 1
+    @Published var tiltDirectionSign: Double = 1
     @Published var connectionMessage = "Waiting for an ESP8266 address."
+    @Published var calibrationMessage = "Not calibrated yet."
     @Published var lastStatus: ESP8266Status?
     @Published var lastErrorMessage: String?
     @Published var isSending = false
 
     private let client = ESP8266Client()
     private let motionCoordinator = MotionCoordinator()
-    private let liveSendInterval: TimeInterval = 0.12
-    private let correctionGain: Double = 0.18
-    private var lastLiveSend = Date.distantPast
+    private let headingCoordinator = HeadingCoordinator()
+    private let correctionGain: Double = 0.20
+    private let deadbandHeading: Double = 2.0
+    private let deadbandPitch: Double = 1.5
+    private let sendInterval: TimeInterval = 0.12
+    private var lastSendTime = Date.distantPast
 
     init() {
         motionCoordinator.onUpdate = { [weak self] sample in
-            self?.handleMotion(sample)
+            self?.motion = sample
+            self?.attemptAutoHold()
+        }
+
+        headingCoordinator.onUpdate = { [weak self] sample in
+            self?.heading = sample
+            self?.attemptAutoHold()
         }
 
         motionCoordinator.start()
+        headingCoordinator.start()
     }
 
     func connect() {
-        Task {
-            await refreshStatus()
-        }
+        Task { await refreshStatus() }
     }
 
     func refreshStatus() async {
@@ -52,68 +63,32 @@ final class ControlViewModel: ObservableObject {
         }
     }
 
-    func sendManualTarget() {
-        Task {
-            await sendTarget(manualTarget, message: "Manual target sent.")
-        }
-    }
-
-    func sendHome() {
-        manualTarget = .home
-        Task {
-            await sendTarget(.home, message: "Home preset sent.")
-        }
-    }
-
-    func sendLookUp() {
-        manualTarget = .lookUp
-        Task {
-            await sendTarget(.lookUp, message: "Look-up preset sent.")
-        }
-    }
-
-    func zeroHardware() {
-        Task {
-            guard let host = validatedHost else {
-                connectionMessage = "Enter the ESP8266 IP address first."
-                return
-            }
-
-            do {
-                isSending = true
-                let status = try await client.zero(host: host)
-                lastStatus = status
-                zeroReference = motion
-                commandTarget = .home
-                manualTarget = .home
-                lastErrorMessage = nil
-                connectionMessage = "Hardware zeroed."
-            } catch {
-                lastErrorMessage = error.localizedDescription
-                connectionMessage = "Zeroing failed."
-            }
-
-            isSending = false
-        }
-    }
-
-    func setLiveHoldEnabled(_ enabled: Bool) {
-        liveHoldEnabled = enabled
-        lastLiveSend = .distantPast
-
+    func toggleAutoHold(_ enabled: Bool) {
+        autoHoldEnabled = enabled
         if enabled {
-            if zeroReference == .zero {
-                zeroReference = motion
-            }
-            connectionMessage = "Live hold enabled."
+            connectionMessage = "Auto hold enabled."
+            attemptAutoHold()
         } else {
-            connectionMessage = "Live hold paused."
+            connectionMessage = "Auto hold paused."
         }
     }
 
-    func calibrateMotionZero() {
-        zeroReference = motion
-        connectionMessage = "Motion zero captured."
+    func resetNorthAndUpDefaults() {
+        desiredHeadingDegrees = 0
+        desiredPitchDegrees = 70
+        calibrationMessage = "Target reset to north + slight up."
+    }
+
+    func captureCurrentPose() {
+        desiredHeadingDegrees = currentHeadingDegrees
+        desiredPitchDegrees = motion.pitchDegrees
+        calibrationMessage = "Captured current pose as the hold target."
+    }
+
+    func calibrateMotorPolarity() {
+        Task {
+            await runPolarityCalibration()
+        }
     }
 
     private var validatedHost: String? {
@@ -121,55 +96,47 @@ final class ControlViewModel: ObservableObject {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    private func handleMotion(_ sample: MotionSample) {
-        motion = sample
+    private var currentHeadingDegrees: Double {
+        guard heading.isAvailable else { return 0 }
+        return heading.headingDegrees
+    }
 
-        guard liveHoldEnabled else {
-            return
-        }
+    private func attemptAutoHold() {
+        guard autoHoldEnabled else { return }
+        guard !isSending else { return }
+        guard let host = validatedHost else { return }
+        guard motion.isAvailable, heading.isAvailable else { return }
 
-        guard sample.isAvailable, let host = validatedHost else {
+        let headingError = normalizeAngleDegrees(desiredHeadingDegrees - currentHeadingDegrees)
+        let pitchError = desiredPitchDegrees - motion.pitchDegrees
+
+        if abs(headingError) < deadbandHeading, abs(pitchError) < deadbandPitch {
+            connectionMessage = "Holding target."
             return
         }
 
         let now = Date()
-        guard now.timeIntervalSince(lastLiveSend) >= liveSendInterval else {
-            return
-        }
+        guard now.timeIntervalSince(lastSendTime) >= sendInterval else { return }
 
-        let relativeYaw = normalizeAngleDegrees(sample.yawDegrees - zeroReference.yawDegrees)
-        let relativePitch = sample.pitchDegrees - zeroReference.pitchDegrees
+        let deltaMotor1 = panDirectionSign * headingError * correctionGain
+        let deltaMotor2 = tiltDirectionSign * pitchError * correctionGain
 
-        let headingError = normalizeAngleDegrees(manualTarget.motor1Degrees - relativeYaw)
-        let tiltError = manualTarget.motor2Degrees - relativePitch
+        let clippedMotor1 = clamp(deltaMotor1, min: -18, max: 18)
+        let clippedMotor2 = clamp(deltaMotor2, min: -18, max: 18)
 
-        let nextTarget = StepperTarget(
-            motor1Degrees: clamp(commandTarget.motor1Degrees + headingError * correctionGain, min: -160, max: 160),
-            motor2Degrees: clamp(commandTarget.motor2Degrees + tiltError * correctionGain, min: -160, max: 160)
-        )
+        guard abs(clippedMotor1) >= 0.15 || abs(clippedMotor2) >= 0.15 else { return }
 
-        guard abs(nextTarget.motor1Degrees - commandTarget.motor1Degrees) > 0.1 ||
-                abs(nextTarget.motor2Degrees - commandTarget.motor2Degrees) > 0.1 else {
-            return
-        }
-
-        lastLiveSend = now
+        lastSendTime = now
         Task {
-            await sendTarget(nextTarget, message: "Live hold updated.", hostOverride: host)
+            await sendJog(host: host, deltaMotor1: clippedMotor1, deltaMotor2: clippedMotor2, message: "Auto correcting.")
         }
     }
 
-    private func sendTarget(_ target: StepperTarget, message: String, hostOverride: String? = nil) async {
-        guard let host = hostOverride ?? validatedHost else {
-            connectionMessage = "Enter the ESP8266 IP address first."
-            return
-        }
-
+    private func sendJog(host: String, deltaMotor1: Double, deltaMotor2: Double, message: String) async {
         do {
             isSending = true
-            let status = try await client.move(host: host, motor1: target.motor1Degrees, motor2: target.motor2Degrees)
+            let status = try await client.jog(host: host, delta1: deltaMotor1, delta2: deltaMotor2)
             lastStatus = status
-            commandTarget = target
             lastErrorMessage = nil
             connectionMessage = message
         } catch {
@@ -178,5 +145,89 @@ final class ControlViewModel: ObservableObject {
         }
 
         isSending = false
+    }
+
+    private func runPolarityCalibration() async {
+        guard let host = validatedHost else {
+            connectionMessage = "Enter the ESP8266 IP address first."
+            return
+        }
+
+        let wasEnabled = autoHoldEnabled
+        autoHoldEnabled = false
+
+        calibrationMessage = "Calibrating motor 1..."
+        let panSign = await calibrateAxis(
+            host: host,
+            motor1Delta: 8,
+            motor2Delta: 0,
+            expectedSensorDelta: {
+                normalizeAngleDegrees(self.currentHeadingDegrees - $0)
+            }
+        )
+
+        if let panSign {
+            panDirectionSign = panSign
+        }
+
+        calibrationMessage = "Calibrating motor 2..."
+        let tiltSign = await calibrateAxis(
+            host: host,
+            motor1Delta: 0,
+            motor2Delta: 8,
+            expectedSensorDelta: {
+                self.motion.pitchDegrees - $0
+            }
+        )
+
+        if let tiltSign {
+            tiltDirectionSign = tiltSign
+        }
+
+        calibrationMessage = "Direction calibration complete."
+        if wasEnabled {
+            autoHoldEnabled = true
+            attemptAutoHold()
+        }
+    }
+
+    private func calibrateAxis(
+        host: String,
+        motor1Delta: Double,
+        motor2Delta: Double,
+        expectedSensorDelta: @escaping (Double) -> Double
+    ) async -> Double? {
+        let baseline = motor1Delta != 0 ? currentHeadingDegrees : motion.pitchDegrees
+
+        do {
+            isSending = true
+            _ = try await client.jog(host: host, delta1: motor1Delta, delta2: motor2Delta)
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+
+            let delta = expectedSensorDelta(baseline)
+            let sign: Double
+            if delta > 0.5 {
+                sign = 1
+            } else if delta < -0.5 {
+                sign = -1
+            } else {
+                sign = 0
+            }
+
+            if motor1Delta != 0 {
+                _ = try await client.jog(host: host, delta1: -motor1Delta, delta2: 0)
+            } else {
+                _ = try await client.jog(host: host, delta1: 0, delta2: -motor2Delta)
+            }
+
+            try await Task.sleep(nanoseconds: 600_000_000)
+            isSending = false
+            return sign == 0 ? nil : sign
+        } catch {
+            isSending = false
+            lastErrorMessage = error.localizedDescription
+            calibrationMessage = "Calibration failed."
+            return nil
+        }
     }
 }

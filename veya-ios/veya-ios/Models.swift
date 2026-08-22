@@ -10,6 +10,16 @@ struct MotionSample: Equatable {
     static let zero = MotionSample()
 }
 
+struct HeadingSample: Equatable {
+    var headingDegrees: Double = 0
+    var accuracyDegrees: Double = 0
+    var isAvailable: Bool = false
+    var usesTrueNorth: Bool = false
+    var timestamp: Date = .now
+
+    static let zero = HeadingSample()
+}
+
 struct StepperTarget: Equatable {
     var motor1Degrees: Double
     var motor2Degrees: Double
@@ -52,4 +62,3 @@ func normalizeAngleDegrees(_ value: Double) -> Double {
 func degrees(fromRadians radians: Double) -> Double {
     radians * 180 / .pi
 }
-

@@ -9,24 +9,14 @@ struct ContentView: View {
 
             ScrollView {
                 VStack(spacing: 16) {
-                    headerCard
+                    heroCard
                     connectionCard
+                    autoHoldCard
                     motionCard
-                    targetCard
-                    liveCard
-                    if let lastStatus = viewModel.lastStatus {
-                        statusCard(status: lastStatus)
-                    }
-                    if let error = viewModel.lastErrorMessage {
-                        errorCard(message: error)
-                    }
+                    calibrationCard
+                    statusCard
                 }
                 .padding(16)
-            }
-        }
-        .onAppear {
-            if viewModel.zeroReference == .zero, viewModel.motion.isAvailable {
-                viewModel.zeroReference = viewModel.motion
             }
         }
     }
@@ -58,114 +48,163 @@ struct ContentView: View {
         }
     }
 
-    private var headerCard: some View {
+    private var heroCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Veya")
-                .font(.system(size: 38, weight: .bold, design: .rounded))
+            Text("Veya Auto Hold")
+                .font(.system(size: 34, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
 
-            Text("Drive the 2-axis stand over Wi-Fi from this iPad, then swap in person tracking later without changing the hardware link.")
+            Text("Keeps the mounted phone pointed north and slightly upward using live compass and motion feedback.")
                 .font(.system(size: 15, weight: .regular, design: .rounded))
-                .foregroundStyle(.white.opacity(0.75))
+                .foregroundStyle(.white.opacity(0.76))
 
             HStack(spacing: 10) {
-                statusPill
+                pill(viewModel.connectionMessage)
                 if viewModel.isSending {
-                    statusPill(text: "Sending")
+                    pill("Sending")
                 }
             }
         }
         .cardStyle()
     }
 
-    private var statusPill: some View {
-        statusPill(text: viewModel.connectionMessage)
-    }
-
-    private func statusPill(text: String) -> some View {
-        Text(text)
-            .font(.system(size: 11, design: .monospaced))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color.white.opacity(0.12), in: Capsule())
-    }
-
     private var connectionCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            cardTitle("Connection")
+            sectionTitle("Connection")
 
             TextField("ESP8266 IP address", text: $viewModel.espHost)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .keyboardType(.numbersAndPunctuation)
                 .padding(12)
-                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .foregroundStyle(.white)
+                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .stroke(Color.white.opacity(0.10), lineWidth: 1)
                 }
 
             HStack(spacing: 10) {
-                actionButton(title: "Connect", systemImage: "wifi", tint: .cyan) {
+                button("Connect", systemImage: "wifi", tint: .cyan) {
                     viewModel.connect()
                 }
 
-                actionButton(title: "Zero Hardware", systemImage: "scope", tint: .orange) {
-                    viewModel.zeroHardware()
+                button("Refresh", systemImage: "arrow.clockwise", tint: .blue) {
+                    viewModel.connect()
                 }
             }
+        }
+        .cardStyle()
+    }
+
+    private var autoHoldCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("Auto Hold")
+
+            Toggle("Enable automatic north/up tracking", isOn: autoHoldBinding)
+                .toggleStyle(.switch)
+                .tint(.cyan)
+                .foregroundStyle(.white)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Target heading: \(viewModel.desiredHeadingDegrees, format: .number.precision(.fractionLength(1)))°")
+                Text("Target pitch: \(viewModel.desiredPitchDegrees, format: .number.precision(.fractionLength(1)))°")
+                Text("Pan sign: \(viewModel.panDirectionSign, format: .number.precision(.fractionLength(0)))")
+                Text("Tilt sign: \(viewModel.tiltDirectionSign, format: .number.precision(.fractionLength(0)))")
+            }
+            .font(.system(size: 13, design: .monospaced))
+            .foregroundStyle(.white.opacity(0.78))
         }
         .cardStyle()
     }
 
     private var motionCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            cardTitle("Motion")
-
-            motionGrid
+            sectionTitle("Live Sensors")
 
             HStack(spacing: 10) {
-                actionButton(title: "Calibrate Zero", systemImage: "target", tint: .mint) {
-                    viewModel.calibrateMotionZero()
-                }
+                metricTile(title: "Heading", value: viewModel.heading.headingDegrees, suffix: "°")
+                metricTile(title: "Pitch", value: viewModel.motion.pitchDegrees, suffix: "°")
+            }
 
-                Toggle("Live Hold", isOn: liveHoldBinding)
-                .toggleStyle(.switch)
-                .tint(.cyan)
-                .foregroundStyle(.white)
+            HStack(spacing: 10) {
+                metricTile(title: "Heading Acc", value: viewModel.heading.accuracyDegrees, suffix: "°")
+                metricTile(title: "Motion", value: viewModel.motion.isAvailable ? 1 : 0, suffix: viewModel.motion.isAvailable ? "Yes" : "No")
             }
         }
         .cardStyle()
     }
 
-    private var motionGrid: some View {
-        VStack(spacing: 12) {
-            HStack {
-                metricTile(title: "Yaw", value: viewModel.motion.yawDegrees, suffix: "°")
-                metricTile(title: "Pitch", value: viewModel.motion.pitchDegrees, suffix: "°")
+    private var calibrationCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("Calibration")
+
+            Text(viewModel.calibrationMessage)
+                .font(.system(size: 15, weight: .regular, design: .rounded))
+                .foregroundStyle(.white.opacity(0.78))
+
+            HStack(spacing: 10) {
+                button("Calibrate Motor Signs", systemImage: "arrow.left.arrow.right", tint: .mint) {
+                    viewModel.calibrateMotorPolarity()
+                }
+
+                button("Capture Current Pose", systemImage: "scope", tint: .orange) {
+                    viewModel.captureCurrentPose()
+                }
             }
 
-            HStack {
-                metricTile(title: "Roll", value: viewModel.motion.rollDegrees, suffix: "°")
-                metricTile(title: "Available", value: viewModel.motion.isAvailable ? 1 : 0, suffix: viewModel.motion.isAvailable ? "Yes" : "No")
+            HStack(spacing: 10) {
+                button("Reset To North/Up", systemImage: "location.north.line", tint: .indigo) {
+                    viewModel.resetNorthAndUpDefaults()
+                }
             }
         }
+        .cardStyle()
+    }
+
+    private var statusCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionTitle("Status")
+
+            if let status = viewModel.lastStatus {
+                Text(status.message)
+                    .foregroundStyle(.white.opacity(0.80))
+                Text("IP: \(status.ip ?? "unknown")")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.68))
+            } else {
+                Text("Waiting for ESP8266 status.")
+                    .foregroundStyle(.white.opacity(0.80))
+            }
+
+            if let error = viewModel.lastErrorMessage {
+                Text(error)
+                    .foregroundStyle(.red.opacity(0.9))
+            }
+        }
+        .cardStyle()
+    }
+
+    private var autoHoldBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.autoHoldEnabled },
+            set: { viewModel.toggleAutoHold($0) }
+        )
     }
 
     private func metricTile(title: String, value: Double, suffix: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title.uppercased())
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.6))
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.62))
+
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text(value, format: .number.precision(.fractionLength(1)))
                     .font(.system(size: 22, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white)
                 Text(suffix)
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.7))
+                    .foregroundStyle(.white.opacity(0.68))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -177,105 +216,7 @@ struct ContentView: View {
         }
     }
 
-    private var targetCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            cardTitle("Targets")
-
-            sliderRow(
-                title: "Motor 1",
-                value: $viewModel.manualTarget.motor1Degrees,
-                range: -160...160
-            )
-
-            sliderRow(
-                title: "Motor 2",
-                value: $viewModel.manualTarget.motor2Degrees,
-                range: -160...160
-            )
-
-            HStack(spacing: 10) {
-                actionButton(title: "Home", systemImage: "house", tint: .blue) {
-                    viewModel.sendHome()
-                }
-                actionButton(title: "Look Up", systemImage: "arrow.up", tint: .indigo) {
-                    viewModel.sendLookUp()
-                }
-                actionButton(title: "Send", systemImage: "paperplane.fill", tint: .green) {
-                    viewModel.sendManualTarget()
-                }
-            }
-        }
-        .cardStyle()
-    }
-
-    private var liveCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            cardTitle("Live Loop")
-
-            Text("When Live Hold is enabled, the app uses Core Motion as a lightweight feedback loop. That keeps the protocol ready for later person tracking.")
-                .font(.system(size: 15, weight: .regular, design: .rounded))
-                .foregroundStyle(.white.opacity(0.72))
-
-            HStack(spacing: 10) {
-                metricTile(title: "Command M1", value: viewModel.commandTarget.motor1Degrees, suffix: "°")
-                metricTile(title: "Command M2", value: viewModel.commandTarget.motor2Degrees, suffix: "°")
-            }
-        }
-        .cardStyle()
-    }
-
-    @ViewBuilder
-    private func statusCard(status: ESP8266Status) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            cardTitle("ESP8266 Status")
-
-            Text(status.message)
-                .foregroundStyle(.white.opacity(0.8))
-
-            Text("IP: \(status.ip ?? "unknown")")
-            .font(.system(size: 11, design: .monospaced))
-            .foregroundStyle(.white.opacity(0.7))
-
-            HStack(spacing: 10) {
-                metricTile(title: "M1 Target", value: status.motor1.targetDeg, suffix: "°")
-                metricTile(title: "M2 Target", value: status.motor2.targetDeg, suffix: "°")
-            }
-        }
-        .cardStyle()
-    }
-
-    private func errorCard(message: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            cardTitle("Error")
-            Text(message)
-                .foregroundStyle(.white.opacity(0.82))
-        }
-        .cardStyle(borderColor: Color.red.opacity(0.35))
-    }
-
-    private func sliderRow(title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(title)
-                    .foregroundStyle(.white)
-                Spacer()
-                Text(value.wrappedValue, format: .number.precision(.fractionLength(1)))
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.72))
-            }
-
-            Slider(value: value, in: range, step: 0.5)
-                .tint(.cyan)
-        }
-        .padding(12)
-        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        }
-    }
-
-    private func actionButton(title: String, systemImage: String, tint: Color, action: @escaping () -> Void) -> some View {
+    private func button(_ title: String, systemImage: String, tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 8) {
                 Image(systemName: systemImage)
@@ -294,20 +235,20 @@ struct ContentView: View {
         }
     }
 
-    private func cardTitle(_ title: String) -> some View {
+    private func pill(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.white.opacity(0.12), in: Capsule())
+    }
+
+    private func sectionTitle(_ title: String) -> some View {
         Text(title.uppercased())
             .font(.system(size: 11, weight: .semibold, design: .monospaced))
             .foregroundStyle(.white.opacity(0.62))
             .tracking(1.2)
-    }
-
-    private var liveHoldBinding: Binding<Bool> {
-        Binding(
-            get: { viewModel.liveHoldEnabled },
-            set: { newValue in
-                viewModel.setLiveHoldEnabled(newValue)
-            }
-        )
     }
 }
 

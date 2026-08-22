@@ -402,6 +402,8 @@
 				"INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsArbitraryLoadsInLocalNetworking[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_NSLocalNetworkUsageDescription[sdk=iphoneos*]" = "Veya uses your local Wi-Fi to talk to the ESP8266 motor controller.";
 				"INFOPLIST_KEY_NSLocalNetworkUsageDescription[sdk=iphonesimulator*]" = "Veya uses your local Wi-Fi to talk to the ESP8266 motor controller.";
+				"INFOPLIST_KEY_NSLocationWhenInUseUsageDescription[sdk=iphoneos*]" = "Veya uses compass heading to keep the mounted phone pointing north.";
+				"INFOPLIST_KEY_NSLocationWhenInUseUsageDescription[sdk=iphonesimulator*]" = "Veya uses compass heading to keep the mounted phone pointing north.";
 				"INFOPLIST_KEY_NSMotionUsageDescription[sdk=iphoneos*]" = "Veya reads device motion to steer the rotating stand.";
 				"INFOPLIST_KEY_NSMotionUsageDescription[sdk=iphonesimulator*]" = "Veya reads device motion to steer the rotating stand.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
@@ -453,6 +455,8 @@
 				"INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsArbitraryLoadsInLocalNetworking[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_NSLocalNetworkUsageDescription[sdk=iphoneos*]" = "Veya uses your local Wi-Fi to talk to the ESP8266 motor controller.";
 				"INFOPLIST_KEY_NSLocalNetworkUsageDescription[sdk=iphonesimulator*]" = "Veya uses your local Wi-Fi to talk to the ESP8266 motor controller.";
+				"INFOPLIST_KEY_NSLocationWhenInUseUsageDescription[sdk=iphoneos*]" = "Veya uses compass heading to keep the mounted phone pointing north.";
+				"INFOPLIST_KEY_NSLocationWhenInUseUsageDescription[sdk=iphonesimulator*]" = "Veya uses compass heading to keep the mounted phone pointing north.";
 				"INFOPLIST_KEY_NSMotionUsageDescription[sdk=iphoneos*]" = "Veya reads device motion to steer the rotating stand.";
 				"INFOPLIST_KEY_NSMotionUsageDescription[sdk=iphonesimulator*]" = "Veya reads device motion to steer the rotating stand.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
