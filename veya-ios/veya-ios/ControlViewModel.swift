@@ -50,10 +50,10 @@ final class ControlViewModel: ObservableObject {
     private let headingSmoothing: Double = 0.22
     private let faceSmoothing: Double = 0.30
     private let faceSearchPanRange: Double = 135
-    private let faceSearchPanSpeedDegreesPerSecond: Double = 20
+    private let faceSearchPanSpeedDegreesPerSecond: Double = 30
     private let faceSearchLoopTick: UInt64 = 50_000_000
     private let faceSearchRetryInterval: TimeInterval = 5.0
-    private let faceLostGracePeriod: TimeInterval = 0.35
+    private let faceLostGracePeriod: TimeInterval = 2.5
     private let faceCenterHoldFrames = 3
     private let motor2PitchMinDegrees: Double = 0
     private let motor2PitchMaxDegrees: Double = 83
@@ -359,18 +359,18 @@ final class ControlViewModel: ObservableObject {
         lastFacePanCommandDegrees = 0
         lastFaceTiltCommandDegrees = 0
         faceCenterStableCount = 0
-        faceLockedOnTarget = false
         lastFaceLockXOffset = 0
         lastFaceLockYOffset = 0
         log.debug("Face not detected; lastSeenAge=\(now.timeIntervalSince(self.lastFaceSeenTime), privacy: .public)s")
 
         guard now.timeIntervalSince(lastFaceSeenTime) >= faceLostGracePeriod else {
-            faceSearchStatus = "Brief face loss"
-            connectionMessage = "Face briefly lost."
-            log.debug("Face briefly lost; waiting for grace period.")
+            faceSearchStatus = "Face briefly lost; holding."
+            connectionMessage = "Face briefly lost; holding."
+            log.debug("Face briefly lost; still within grace period.")
             return
         }
 
+        faceLockedOnTarget = false
         startFaceSearchLoop(host: host)
     }
 
