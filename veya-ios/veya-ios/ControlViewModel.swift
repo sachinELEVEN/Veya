@@ -375,8 +375,9 @@ final class ControlViewModel: ObservableObject {
         log.debug("Face not detected; lastSeenAge=\(now.timeIntervalSince(self.lastFaceSeenTime), privacy: .public)s")
 
         guard now.timeIntervalSince(lastFaceSeenTime) >= faceLostGracePeriod else {
-            faceSearchStatus = "Face briefly lost; holding."
-            connectionMessage = "Face briefly lost; holding."
+            let firstDirection = faceSearchFirstDirectionLabel()
+            faceSearchStatus = "Face briefly lost; will first look towards \(firstDirection)."
+            connectionMessage = "Face briefly lost; will first look towards \(firstDirection)."
             log.debug("Face briefly lost; still within grace period.")
             return
         }
@@ -408,7 +409,7 @@ final class ControlViewModel: ObservableObject {
             faceSearchPanDirection = initialSearch.direction
             faceSearchLegsCompleted = 0
             faceSearchTiltTargetDegrees = clampPitch(70)
-            faceSearchStatus = "Searching face at 70°"
+            faceSearchStatus = "Searching face at 70°; first looking \(faceSearchFirstDirectionLabel())."
             faceSearchInitialized = true
             let initialTiltDelta = limitedMotor2Delta(
                 from: motion.pitchDegrees,
@@ -488,7 +489,7 @@ final class ControlViewModel: ObservableObject {
             faceSearchPanOffset = retrySearch.panDelta
             faceSearchPanDirection = retrySearch.direction
             faceSearchTiltTargetDegrees = clampPitch(70)
-            faceSearchStatus = "Retrying face search at 70°"
+            faceSearchStatus = "Retrying face search at 70°; first looking \(faceSearchFirstDirectionLabel())."
             let retryTiltDelta = limitedMotor2Delta(
                 from: motion.pitchDegrees,
                 desiredDelta: faceSearchTiltTargetDegrees - motion.pitchDegrees
@@ -547,6 +548,18 @@ final class ControlViewModel: ObservableObject {
         )
 
         return (panDelta: direction * magnitude, direction: direction)
+    }
+
+    private func faceSearchFirstDirectionLabel() -> String {
+        if abs(lastFaceXMotionDelta) > 0.02 {
+            return lastFaceXMotionDelta > 0 ? "right" : "left"
+        }
+
+        if abs(lastFaceLockXOffset) > 0.02 {
+            return lastFaceLockXOffset > 0 ? "right" : "left"
+        }
+
+        return "right"
     }
 
     private func runPolarityCalibration() async {
