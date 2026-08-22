@@ -14,6 +14,11 @@ final class ControlViewModel: ObservableObject {
     @Published var tiltDirectionSign: Double = 1
     @Published var connectionMessage = "Waiting for an ESP8266 address."
     @Published var calibrationMessage = "Not calibrated yet."
+    @Published var headingErrorDegrees: Double = 0
+    @Published var pitchErrorDegrees: Double = 0
+    @Published var lastPanCommandDegrees: Double = 0
+    @Published var lastTiltCommandDegrees: Double = 0
+    @Published var filteredHeadingDegrees: Double = 0
     @Published var lastStatus: ESP8266Status?
     @Published var lastErrorMessage: String?
     @Published var isSending = false
@@ -21,10 +26,13 @@ final class ControlViewModel: ObservableObject {
     private let client = ESP8266Client()
     private let motionCoordinator = MotionCoordinator()
     private let headingCoordinator = HeadingCoordinator()
-    private let correctionGain: Double = 0.20
-    private let deadbandHeading: Double = 2.0
+    private let panCorrectionGain: Double = 0.45
+    private let tiltCorrectionGain: Double = 0.20
+    private let deadbandHeading: Double = 6.0
     private let deadbandPitch: Double = 1.5
-    private let sendInterval: TimeInterval = 0.12
+    private let panStepDegrees: Double = 3.0
+    private let sendInterval: TimeInterval = 0.45
+    private let headingSmoothing: Double = 0.22
     private var lastSendTime = Date.distantPast
 
     init() {
@@ -35,6 +43,7 @@ final class ControlViewModel: ObservableObject {
 
         headingCoordinator.onUpdate = { [weak self] sample in
             self?.heading = sample
+            self?.updateFilteredHeading(with: sample)
             self?.attemptAutoHold()
         }
 
@@ -101,6 +110,19 @@ final class ControlViewModel: ObservableObject {
         return heading.headingDegrees
     }
 
+    private func updateFilteredHeading(with sample: HeadingSample) {
+        guard sample.isAvailable else { return }
+
+        if filteredHeadingDegrees == 0 && heading.headingDegrees == 0 {
+            filteredHeadingDegrees = sample.headingDegrees
+            return
+        }
+
+        let current = filteredHeadingDegrees
+        let delta = normalizeAngleDegrees(sample.headingDegrees - current)
+        filteredHeadingDegrees = current + delta * headingSmoothing
+    }
+
     private func attemptAutoHold() {
         guard autoHoldEnabled else { return }
         guard !isSending else { return }
@@ -109,6 +131,8 @@ final class ControlViewModel: ObservableObject {
 
         let headingError = normalizeAngleDegrees(desiredHeadingDegrees - currentHeadingDegrees)
         let pitchError = desiredPitchDegrees - motion.pitchDegrees
+        headingErrorDegrees = headingError
+        pitchErrorDegrees = pitchError
 
         if abs(headingError) < deadbandHeading, abs(pitchError) < deadbandPitch {
             connectionMessage = "Holding target."
@@ -118,11 +142,14 @@ final class ControlViewModel: ObservableObject {
         let now = Date()
         guard now.timeIntervalSince(lastSendTime) >= sendInterval else { return }
 
-        let deltaMotor1 = panDirectionSign * headingError * correctionGain
-        let deltaMotor2 = tiltDirectionSign * pitchError * correctionGain
+        let panMagnitude = min(max(abs(headingError) * panCorrectionGain, panStepDegrees), panStepDegrees * 2.0)
+        let deltaMotor1 = panDirectionSign * (headingError > 0 ? panMagnitude : -panMagnitude)
+        let deltaMotor2 = tiltDirectionSign * pitchError * tiltCorrectionGain
 
-        let clippedMotor1 = clamp(deltaMotor1, min: -18, max: 18)
+        let clippedMotor1 = clamp(deltaMotor1, min: -panStepDegrees * 2.0, max: panStepDegrees * 2.0)
         let clippedMotor2 = clamp(deltaMotor2, min: -18, max: 18)
+        lastPanCommandDegrees = clippedMotor1
+        lastTiltCommandDegrees = clippedMotor2
 
         guard abs(clippedMotor1) >= 0.15 || abs(clippedMotor2) >= 0.15 else { return }
 

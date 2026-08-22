@@ -131,6 +131,16 @@ struct ContentView: View {
                 metricTile(title: "Heading Acc", value: viewModel.heading.accuracyDegrees, suffix: "°")
                 metricTile(title: "Motion", value: viewModel.motion.isAvailable ? 1 : 0, suffix: viewModel.motion.isAvailable ? "Yes" : "No")
             }
+
+            HStack(spacing: 10) {
+                metricTile(title: "Heading Err", value: viewModel.headingErrorDegrees, suffix: "°")
+                metricTile(title: "Pan Cmd", value: viewModel.lastPanCommandDegrees, suffix: "°")
+            }
+
+            HStack(spacing: 10) {
+                metricTile(title: "Pitch Err", value: viewModel.pitchErrorDegrees, suffix: "°")
+                metricTile(title: "Tilt Cmd", value: viewModel.lastTiltCommandDegrees, suffix: "°")
+            }
         }
         .cardStyle()
     }
