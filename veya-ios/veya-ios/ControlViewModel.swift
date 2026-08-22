@@ -56,6 +56,9 @@ final class ControlViewModel: ObservableObject {
     private let faceSearchLoopTick: UInt64 = 50_000_000
     private let faceSearchRetryInterval: TimeInterval = 5.0
     private let faceLostGracePeriod: TimeInterval = 5
+    private let faceSearchInitialPanStepMinDegrees: Double = 4
+    private let faceSearchInitialPanStepMaxDegrees: Double = 18
+    private let faceSearchInitialPanBiasMultiplier: Double = 12
     private let faceCenterHoldFrames = 3
     private let motor2PitchMinDegrees: Double = 0
     private let motor2PitchMaxDegrees: Double = 83
@@ -74,6 +77,7 @@ final class ControlViewModel: ObservableObject {
     private var faceLockedOnTarget = false
     private var lastFaceLockXOffset: Double = 0
     private var lastFaceLockYOffset: Double = 0
+    private var lastFaceXMotionDelta: Double = 0
     private var pendingStartupCalibration = false
     private var filteredFaceX: Double = 0
     private var filteredFaceY: Double = 0
@@ -318,6 +322,11 @@ final class ControlViewModel: ObservableObject {
             faceErrorX = xError
             faceErrorY = yError
 
+            let faceMotionX = xError - lastFaceLockXOffset
+            if abs(faceMotionX) > 0.02 {
+                lastFaceXMotionDelta = faceMotionX
+            }
+
             let panMovedEnough = abs(xError - lastFaceLockXOffset) > faceLockedPanMoveThreshold
             let pitchMovedEnough = abs(yError - lastFaceLockYOffset) > faceLockedPitchMoveThreshold
             let faceMovedEnough = panMovedEnough || pitchMovedEnough
@@ -394,8 +403,9 @@ final class ControlViewModel: ObservableObject {
 
     private func runFaceSearchLoop(host: String) async {
         if !faceSearchInitialized {
-            faceSearchPanOffset = 0
-            faceSearchPanDirection = 1
+            let initialSearch = faceSearchStartupBias()
+            faceSearchPanOffset = initialSearch.panDelta
+            faceSearchPanDirection = initialSearch.direction
             faceSearchLegsCompleted = 0
             faceSearchTiltTargetDegrees = clampPitch(70)
             faceSearchStatus = "Searching face at 70°"
@@ -404,11 +414,11 @@ final class ControlViewModel: ObservableObject {
                 from: motion.pitchDegrees,
                 desiredDelta: faceSearchTiltTargetDegrees - motion.pitchDegrees
             )
-            log.debug("Face search init tiltDelta=\(initialTiltDelta, privacy: .public) panOffset=\(self.faceSearchPanOffset, privacy: .public) panDir=\(self.faceSearchPanDirection, privacy: .public)")
-            if abs(initialTiltDelta) >= 0.05 {
+            log.debug("Face search init tiltDelta=\(initialTiltDelta, privacy: .public) panDelta=\(initialSearch.panDelta, privacy: .public) panDir=\(self.faceSearchPanDirection, privacy: .public) lastFaceXMotion=\(self.lastFaceXMotionDelta, privacy: .public) lastFaceX=\(self.lastFaceLockXOffset, privacy: .public)")
+            if abs(initialSearch.panDelta) >= 0.05 || abs(initialTiltDelta) >= 0.05 {
                 await sendJog(
                     host: host,
-                    deltaMotor1: 0,
+                    deltaMotor1: initialSearch.panDelta,
                     deltaMotor2: initialTiltDelta,
                     message: "Searching face."
                 )
@@ -474,19 +484,20 @@ final class ControlViewModel: ObservableObject {
             guard trackingMode == .faceTracking else { break }
             guard !faceTracking.faceDetected else { break }
 
-            faceSearchPanOffset = 0
-            faceSearchPanDirection = 1
+            let retrySearch = faceSearchStartupBias()
+            faceSearchPanOffset = retrySearch.panDelta
+            faceSearchPanDirection = retrySearch.direction
             faceSearchTiltTargetDegrees = clampPitch(70)
             faceSearchStatus = "Retrying face search at 70°"
             let retryTiltDelta = limitedMotor2Delta(
                 from: motion.pitchDegrees,
                 desiredDelta: faceSearchTiltTargetDegrees - motion.pitchDegrees
             )
-            log.debug("Face search retrying tiltDelta=\(retryTiltDelta, privacy: .public) panOffset=\(self.faceSearchPanOffset, privacy: .public)")
-            if abs(retryTiltDelta) >= 0.05 {
+            log.debug("Face search retrying tiltDelta=\(retryTiltDelta, privacy: .public) panDelta=\(retrySearch.panDelta, privacy: .public) panDir=\(self.faceSearchPanDirection, privacy: .public) lastFaceXMotion=\(self.lastFaceXMotionDelta, privacy: .public) lastFaceX=\(self.lastFaceLockXOffset, privacy: .public)")
+            if abs(retrySearch.panDelta) >= 0.05 || abs(retryTiltDelta) >= 0.05 {
                 await sendJog(
                     host: host,
-                    deltaMotor1: 0,
+                    deltaMotor1: retrySearch.panDelta,
                     deltaMotor2: retryTiltDelta,
                     message: "Searching face."
                 )
@@ -517,6 +528,25 @@ final class ControlViewModel: ObservableObject {
         }
 
         isSending = false
+    }
+
+    private func faceSearchStartupBias() -> (panDelta: Double, direction: Double) {
+        let direction: Double
+        if abs(lastFaceXMotionDelta) > 0.02 {
+            direction = lastFaceXMotionDelta > 0 ? 1 : -1
+        } else if abs(lastFaceLockXOffset) > 0.02 {
+            direction = lastFaceLockXOffset > 0 ? 1 : -1
+        } else {
+            direction = 1
+        }
+
+        let magnitude = clamp(
+            abs(lastFaceLockXOffset) * faceSearchInitialPanBiasMultiplier,
+            min: faceSearchInitialPanStepMinDegrees,
+            max: faceSearchInitialPanStepMaxDegrees
+        )
+
+        return (panDelta: direction * magnitude, direction: direction)
     }
 
     private func runPolarityCalibration() async {
