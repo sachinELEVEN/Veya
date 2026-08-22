@@ -261,7 +261,7 @@ struct ContentView: View {
         Text(title.uppercased())
             .font(.system(size: 11, weight: .semibold, design: .monospaced))
             .foregroundStyle(.white.opacity(0.62))
-            .tracking(1.2)
+           // .tracking(1.2)
     }
 }
 
