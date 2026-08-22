@@ -54,6 +54,7 @@ final class ControlViewModel: ObservableObject {
     private let faceCenterHoldFrames = 3
     private let motor2PitchMinDegrees: Double = 0
     private let motor2PitchMaxDegrees: Double = 83
+    private let motor1TestStepDegrees: Double = 5
     private let motor2TestStepDegrees: Double = 5
     private var lastSendTime = Date.distantPast
     private var lastFaceSendTime = Date.distantPast
@@ -159,6 +160,18 @@ final class ControlViewModel: ObservableObject {
     func calibrateMotorPolarity() {
         Task {
             await runPolarityCalibration()
+        }
+    }
+
+    func panLeftTest() {
+        Task {
+            await jogMotor1TowardLeft()
+        }
+    }
+
+    func panRightTest() {
+        Task {
+            await jogMotor1TowardRight()
         }
     }
 
@@ -593,5 +606,33 @@ final class ControlViewModel: ObservableObject {
         }
 
         await sendJog(host: host, deltaMotor1: 0, deltaMotor2: delta, message: "Pitch moved toward 83°.")
+    }
+
+    private func jogMotor1TowardLeft() async {
+        guard let host = validatedHost else {
+            connectionMessage = "Enter the ESP8266 IP address first."
+            return
+        }
+        guard heading.isAvailable else {
+            connectionMessage = "Heading sensor unavailable."
+            return
+        }
+
+        let delta = panDirectionSign * motor1TestStepDegrees
+        await sendJog(host: host, deltaMotor1: delta, deltaMotor2: 0, message: "Pan moved left.")
+    }
+
+    private func jogMotor1TowardRight() async {
+        guard let host = validatedHost else {
+            connectionMessage = "Enter the ESP8266 IP address first."
+            return
+        }
+        guard heading.isAvailable else {
+            connectionMessage = "Heading sensor unavailable."
+            return
+        }
+
+        let delta = -panDirectionSign * motor1TestStepDegrees
+        await sendJog(host: host, deltaMotor1: delta, deltaMotor2: 0, message: "Pan moved right.")
     }
 }

@@ -213,6 +213,30 @@ struct ContentView: View {
                 .foregroundStyle(.white.opacity(0.78))
 
             VStack(alignment: .leading, spacing: 8) {
+                Text("Motor 1 pan test")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.92))
+
+                Text("Left and right are converted through the calibrated heading direction.")
+                    .font(.system(size: 13, weight: .regular, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.70))
+
+                Text("Live heading sensor: \(viewModel.heading.headingDegrees, format: .number.precision(.fractionLength(1)))°")
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.72))
+
+                HStack(spacing: 10) {
+                    button("Left", systemImage: "arrow.left.circle", tint: .cyan) {
+                        viewModel.panLeftTest()
+                    }
+
+                    button("Right", systemImage: "arrow.right.circle", tint: .pink) {
+                        viewModel.panRightTest()
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
                 Text("Motor 2 pitch test")
                     .font(.system(size: 14, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.92))
